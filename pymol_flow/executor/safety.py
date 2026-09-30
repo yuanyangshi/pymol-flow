@@ -29,8 +29,8 @@ class SafetyVisitor(ast.NodeVisitor):
     # PyMOL command language (which itself exposes OS commands). File loading is
     # instead handled by the user-facing, extension-checked file picker.
     BLOCKED_CMD_METHODS = {
-        "cd", "do", "load", "log", "mpng", "png", "pwd", "run",
-        "save", "system",
+        "cd", "cls", "do", "exit", "load", "log", "mpng", "png", "pwd",
+        "quit", "reinitialize", "run", "save", "system",
     }
 
     def visit_Import(self, node: ast.Import) -> None:
@@ -92,7 +92,31 @@ class CmdProxy:
             raise UnsafeCodeError(f"PyMOL method not available to the model: cmd.{name}")
         if name == "fetch":
             return self._safe_fetch
+        if name == "delete":
+            return self._safe_delete
+        if name == "remove":
+            return self._safe_remove
         return getattr(cmd, name)
+
+    @staticmethod
+    def _safe_delete(name: str = "", *args: Any, **kwargs: Any) -> Any:
+        clean = str(name).strip().lower()
+        if clean in {"all", "*"} or clean.startswith("all ") or clean.endswith(" all"):
+            raise UnsafeCodeError(
+                "Destructive batch deletion ('cmd.delete(\"all\")') is blocked for safety. "
+                "Specify explicit object names to delete."
+            )
+        return cmd.delete(name, *args, **kwargs)
+
+    @staticmethod
+    def _safe_remove(selection: str = "", *args: Any, **kwargs: Any) -> Any:
+        clean = str(selection).strip().lower()
+        if clean in {"all", "*"} or clean == "(all)":
+            raise UnsafeCodeError(
+                "Destructive atom removal ('cmd.remove(\"all\")') is blocked for safety. "
+                "Specify explicit selections or residue numbers."
+            )
+        return cmd.remove(selection, *args, **kwargs)
 
     @staticmethod
     def _safe_fetch(*args: Any, **kwargs: Any) -> Any:

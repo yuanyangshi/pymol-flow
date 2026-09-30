@@ -4,7 +4,7 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
 [![PyMOL: 2.x | 3.x](https://img.shields.io/badge/PyMOL-2.x%20%7C%203.x-orange.svg)](https://pymol.org)
-[![Tests: 110 Passed](https://img.shields.io/badge/Tests-110%20Passed-success.svg)](tests/)
+[![Tests: 111 Passed](https://img.shields.io/badge/Tests-111%20Passed-success.svg)](tests/)
 
 **PyMOL Flow** is a Windows-native AI copilot embedded directly into PyMOL for structural biology and computer-aided drug design (CADD). It translates natural language and speech into validated PyMOL workflows, providing automated pocket interaction profiling, conformational displacement heatmaps, AlphaFold pLDDT confidence analysis, and publication-grade molecular rendering.
 
@@ -156,14 +156,16 @@ Execute the test suite:
 ```cmd
 python -m unittest discover -s tests -v
 ```
-All 110 automated tests (including 11 deep end-to-end scenarios executed against the live PyMOL 3.x engine and 9 viewport reactivity & prompt caching tests) validate AST security sandboxing, multi-turn agent logic, coordinate calculations, publication presets, and credential management.
+All 111 automated tests validate AST security sandboxing, multi-turn agent logic, coordinate calculations, publication presets, and credential management.
 
 ---
 
 ## Security & Data Privacy
 
+- **Non-Destructive AST Sandbox**: Dangerous system calls (`os`, `sys`, `subprocess`, `open`), PyMOL process exits (`cmd.quit`, `cmd.exit`), session resets (`cmd.reinitialize`), and bulk scene wipeouts (`cmd.delete('all')`, `cmd.remove('all')`) are strictly blocked by both static AST inspection and runtime proxy barriers.
+- **Least-Privilege System Boundaries**: Model operations are restricted strictly to user-specified target objects, leaving existing workspace models untouched.
 - **Data Anonymization**: Experimental identifiers, internal project codes, and proprietary filesystem paths are strictly quarantined from public code and documentation.
-- **Local AST Boundaries**: Execution is confined to PyMOL-specific safe operations; unauthorized file access and arbitrary subprocess execution are rejected.
+- **Hardware-Isolated Credentials**: API keys are securely anchored in Windows Credential Manager (`advapi32.dll`), isolated from environment variables and config files.
 - **Git Quarantine**: Local configurations (`.env`), rule sets, and session caches are permanently excluded via `.gitignore`.
 
 ---
