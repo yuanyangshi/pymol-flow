@@ -38,6 +38,52 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "align_structures",
+            "description": (
+                "Intelligently align two molecular structures or complexes in PyMOL. "
+                "Autonomously evaluates monomer vs multimer architecture (dimers, trimers, hetero-oligomers), "
+                "detects and resolves rotational symmetry and chain permutations (e.g. C3 cyclic mismatch), "
+                "handles unequal chain lengths, insertions, or flexible tails, evaluates multiple alignment candidates "
+                "(global align, super, single-chain anchors, dual anchors), and applies the optimal transformation with lowest RMSD."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "mobile_object": {
+                        "type": "string",
+                        "description": "Name of the mobile PyMOL object to move and align.",
+                    },
+                    "target_object": {
+                        "type": "string",
+                        "description": "Name of the reference/target PyMOL object.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "global", "chain_anchor", "super", "cealign"],
+                        "description": "Alignment mode: 'auto' (recommended, autonomously finds best fit), 'global', 'chain_anchor', 'super', or 'cealign'. Defaults to 'auto'.",
+                    },
+                    "ligand_selection": {
+                        "type": "string",
+                        "description": (
+                            "Selection for ligand to preserve binding pocket orientation in complexes "
+                            "(e.g. 'organic' or 'resn LIG'). Defaults to 'organic and not solvent'."
+                        ),
+                    },
+                    "focus_pocket": {
+                        "type": "boolean",
+                        "description": (
+                            "If true and ligands are present, prioritizes chain permutations that minimize ligand "
+                            "centroid displacement and avoid inverted binding pocket polarity. Defaults to true."
+                        ),
+                    },
+                },
+                "required": ["mobile_object", "target_object"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "analyze_protein_ligand_interactions",
             "description": (
                 "Perform quantitative non-covalent protein-ligand interaction profiling (PLIP-style). "
@@ -122,9 +168,10 @@ TOOLS = [
         "function": {
             "name": "compare_conformations",
             "description": (
-                "Compare two protein conformations (e.g. WT vs Mutant, Apo vs Holo, or AlphaFold models). "
-                "Calculates overall Cα RMSD, local pocket RMSD, identifies top shifted residues, "
-                "and generates a blue-white-red residue displacement heatmap spectrum in PyMOL."
+                "Compare two protein conformations (e.g. WT vs Mutant, Apo vs Holo, docking poses) or assess "
+                "cross-target selectivity across different homologous proteins or isoforms with sequence shifts. "
+                "Calculates overall Cα RMSD, local pocket RMSD, automatically maps corresponding residues across sequence offsets, "
+                "identifies top shifted/divergent residues, and generates a blue-white-red displacement heatmap in PyMOL."
             ),
             "parameters": {
                 "type": "object",
@@ -256,6 +303,9 @@ def can_confirm_directly(code: str) -> bool:
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
             fn = node.func
+            if isinstance(fn, ast.Name) and fn.id == "align_structures":
+                changed = True
+                continue
             if not (
                 isinstance(fn, ast.Attribute)
                 and isinstance(fn.value, ast.Name)

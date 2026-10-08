@@ -50,6 +50,7 @@ class PyMOLExecutor:
                 "callable": callable, "iter": iter,
             }
             from ..analysis import (
+                align_structures,
                 analyze_interactions,
                 apply_publication_preset,
                 compare_conformations,
@@ -63,6 +64,7 @@ class PyMOLExecutor:
                 "stored": stored,
                 "math": math,
                 "statistics": statistics,
+                "align_structures": align_structures,
                 "analyze_interactions": analyze_interactions,
                 "compare_conformations": compare_conformations,
                 "apply_publication_preset": apply_publication_preset,
@@ -91,7 +93,7 @@ class PyMOLExecutor:
             self.locals = {
                 key: value for key, value in namespace.items()
                 if not key.startswith("__") and key not in {
-                    "cmd", "stored", "math", "statistics", "analyze_interactions", "load_structures_from_path"
+                    "cmd", "stored", "math", "statistics", "align_structures", "analyze_interactions", "load_structures_from_path"
                 }
             }
             output = stream.getvalue().strip()
@@ -127,6 +129,14 @@ class PyMOLExecutor:
                 hint = (
                     "\n[PyMOL Hint]: This cmd method does not exist. Use standard PyMOL API calls "
                     "(cmd.select, cmd.show, cmd.color, cmd.orient, cmd.distance, cmd.set, etc.)."
+                )
+            elif "selector-error" in message.lower() or "syntax error" in message.lower():
+                hint = (
+                    "\n[PyMOL Hint]: PyMOL selection syntax error. Common causes:\n"
+                    "1. Lists in resi: use 'resi 10+20' or 'resi 10-50', NEVER python lists like 'resi [10, 20]' or unquoted commas.\n"
+                    "2. Wrap object names in parentheses: e.g. '(1abc) and name CA'.\n"
+                    "3. Pocket selections: use 'byres ((obj) within 4.5 of organic)'.\n"
+                    "4. Valid keywords: 'polymer.protein', 'polymer.nucleic', 'organic', 'solvent', 'hetatm'."
                 )
             if hint:
                 message = f"{message}{hint}"

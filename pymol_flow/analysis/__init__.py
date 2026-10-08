@@ -1,5 +1,9 @@
 """Scientific structure, interaction, conformation, and publication rendering package."""
 
+from .align import (
+    IntelligentAlignResult,
+    align_structures,
+)
 from .conformation import (
     ConformationComparisonResult,
     ResidueDisplacement,
@@ -31,6 +35,7 @@ from .selection import (
 
 __all__ = [
     "ConformationComparisonResult",
+    "IntelligentAlignResult",
     "InteractionItem",
     "InteractionReport",
     "LoadedStructureInfo",
@@ -39,6 +44,7 @@ __all__ = [
     "ResidueDisplacement",
     "SelectionSummary",
     "StructureLoadResult",
+    "align_structures",
     "analyze_interactions",
     "apply_publication_preset",
     "clear_viewport_selection",

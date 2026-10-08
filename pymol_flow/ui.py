@@ -45,6 +45,7 @@ class Task(QtCore.QRunnable):
 
 class DropPanel(QtWidgets.QWidget):
     files_dropped = QtCore.pyqtSignal(list)
+    images_dropped = QtCore.pyqtSignal(list)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,11 +54,19 @@ class DropPanel(QtWidgets.QWidget):
     def dragEnterEvent(self, event):
         paths = [url.toLocalFile() for url in event.mimeData().urls()]
         allowed_exts = {".pdb", ".cif", ".mmcif", ".ent", ".sdf", ".mol2", ".pse", ".pdbqt"}
-        if any(Path(path).is_dir() or Path(path).suffix.lower() in allowed_exts for path in paths):
+        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif"}
+        if any(Path(path).is_dir() or Path(path).suffix.lower() in (allowed_exts | image_exts) for path in paths):
             event.acceptProposedAction()
 
     def dropEvent(self, event):
-        self.files_dropped.emit([url.toLocalFile() for url in event.mimeData().urls()])
+        paths = [url.toLocalFile() for url in event.mimeData().urls()]
+        image_exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff", ".tif", ".gif"}
+        img_paths = [p for p in paths if Path(p).suffix.lower() in image_exts]
+        other_paths = [p for p in paths if Path(p).suffix.lower() not in image_exts]
+        if img_paths:
+            self.images_dropped.emit(img_paths)
+        if other_paths:
+            self.files_dropped.emit(other_paths)
         event.acceptProposedAction()
 
 
@@ -178,6 +187,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.busy = False
         self._streaming = False
         self._messages: list[dict[str, Any]] = []
+        self._pending_images: list[dict[str, Any]] = []
         self._active_turn: dict[str, Any] | None = None
         self._thinking_timer = QtCore.QTimer(self)
         self._thinking_timer.setInterval(250)
@@ -203,6 +213,8 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         root.setAutoFillBackground(True)
         self.panel_root = root
         root.files_dropped.connect(self.load_files)
+        root.images_dropped.connect(self._on_images_dropped)
+        root.installEventFilter(self)
         layout = QtWidgets.QVBoxLayout(root)
         layout.setContentsMargins(10, 8, 10, 8)
         layout.setSpacing(8)
@@ -244,11 +256,24 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.thought_received.connect(self._on_thought_received)
         self.tool_executed.connect(self._on_tool_executed)
 
+        self.attachment_bar = QtWidgets.QWidget()
+        self.attachment_bar.setObjectName("attachment_bar")
+        self.attachment_layout = QtWidgets.QHBoxLayout(self.attachment_bar)
+        self.attachment_layout.setContentsMargins(4, 2, 4, 4)
+        self.attachment_layout.setSpacing(6)
+        self.attachment_bar.setVisible(False)
+        layout.addWidget(self.attachment_bar)
+
         input_row = QtWidgets.QHBoxLayout()
         self.mic_button = QtWidgets.QPushButton("●")
         self.mic_button.setObjectName("chat_mic_button")
         self.mic_button.setToolTip("Start voice input")
         self.mic_button.setFixedSize(34, 32)
+        self.image_button = QtWidgets.QPushButton("🖼")
+        self.image_button.setObjectName("chat_image_button")
+        self.image_button.setToolTip("Add image (choose file, capture PyMOL viewport, or paste Ctrl+V)")
+        self.image_button.setFixedSize(34, 32)
+        self.image_button.clicked.connect(self._prompt_add_image)
         self.input = QtWidgets.QLineEdit()
         self.input.setObjectName("chat_input")
         self.input.setPlaceholderText("Ask PyMOL…")
@@ -273,27 +298,27 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.key_action.triggered.connect(self.show_key_dialog)
         self.options_menu.addSeparator()
 
-        self.thinking_menu = QtWidgets.QMenu("Deep Thinking (深度思考)", self.options_menu)
+        self.thinking_menu = QtWidgets.QMenu("Deep Thinking", self.options_menu)
         self.thinking_action = self.thinking_menu.menuAction()
         self.thinking_action.setCheckable(True)
-        self.thinking_action.setToolTip("Thinking modes: Auto (智能触发), Always On, Always Off")
+        self.thinking_action.setToolTip("Thinking modes: Auto, Always On, Always Off")
 
         self.thinking_group = QtWidgets.QActionGroup(self)
         self.thinking_group.setExclusive(True)
 
-        self.action_thinking_auto = self.thinking_menu.addAction("Auto (智能触发 — 推荐)")
+        self.action_thinking_auto = self.thinking_menu.addAction("Auto (Recommended)")
         self.action_thinking_auto.setCheckable(True)
         self.action_thinking_auto.setData("auto")
         self.action_thinking_auto.setToolTip("Intelligently triggers thinking on complex reasoning, fast for operations")
         self.thinking_group.addAction(self.action_thinking_auto)
 
-        self.action_thinking_on = self.thinking_menu.addAction("Always On (始终开启)")
+        self.action_thinking_on = self.thinking_menu.addAction("Always On")
         self.action_thinking_on.setCheckable(True)
         self.action_thinking_on.setData("on")
         self.action_thinking_on.setToolTip("Always enable deep thinking before answering")
         self.thinking_group.addAction(self.action_thinking_on)
 
-        self.action_thinking_off = self.thinking_menu.addAction("Always Off (极速模式)")
+        self.action_thinking_off = self.thinking_menu.addAction("Always Off")
         self.action_thinking_off.setCheckable(True)
         self.action_thinking_off.setData("off")
         self.action_thinking_off.setToolTip("Always disable thinking for instant answers")
@@ -322,7 +347,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.debug_action.setCheckable(True)
         self.debug_action.toggled.connect(self.debug_view.setVisible)
         self.options_menu.addSeparator()
-        self.top_panel_action = self.options_menu.addAction("Top Panel (顶部控制台)")
+        self.top_panel_action = self.options_menu.addAction("Top Panel")
         self.top_panel_action.setCheckable(True)
         self.top_panel_action.setToolTip("Toggle PyMOL native upper console and quick buttons")
         main_win = self.parent() if isinstance(self.parent(), QtWidgets.QMainWindow) else None
@@ -330,11 +355,11 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.top_panel_action.setChecked(is_visible)
         self.top_panel_action.toggled.connect(self._toggle_top_panel)
         self.options_menu.addSeparator()
-        self.reload_action = self.options_menu.addAction("Reload Plugin (热重载)")
+        self.reload_action = self.options_menu.addAction("Reload Plugin")
         self.reload_action.setToolTip("Reload Python code and restart chat dock without closing PyMOL")
         self.reload_action.triggered.connect(self._reload_plugin)
         self.options_menu.addSeparator()
-        self.cancel_action = self.options_menu.addAction("Stop Generation (停止生成)")
+        self.cancel_action = self.options_menu.addAction("Stop Generation")
         self.cancel_action.setToolTip("Cancel active agent execution (Esc)")
         self.cancel_action.setEnabled(False)
         self.cancel_action.triggered.connect(self.cancel)
@@ -347,6 +372,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.stop_button.clicked.connect(self.cancel)
 
         input_row.addWidget(self.mic_button)
+        input_row.addWidget(self.image_button)
         input_row.addWidget(self.input, 1)
         input_row.addWidget(self.stop_button)
         input_row.addWidget(self.key_status)
@@ -570,6 +596,56 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             QPushButton#chat_mic_button[recording="true"] {
                 color: white;
                 background-color: #DC2626;
+                border-color: #EF4444;
+            }
+            QPushButton#chat_image_button {
+                background-color: #242730;
+                color: #94A3B8;
+                border: 1px solid #333842;
+                border-radius: 6px;
+                font-size: 15px;
+                padding: 0px;
+            }
+            QPushButton#chat_image_button:hover {
+                background-color: #2E333F;
+                color: #A78BFA;
+                border-color: #7C5CFC;
+            }
+            QWidget#attachment_bar {
+                background-color: #1A1C22;
+                border: 1px solid #2B2E38;
+                border-radius: 6px;
+                padding: 2px 4px;
+            }
+            QFrame#attachment_card {
+                background-color: #242730;
+                border: 1px solid #374151;
+                border-radius: 5px;
+            }
+            QLabel#attachment_name {
+                color: #E2E8F0;
+                font-size: 11px;
+            }
+            QPushButton#attachment_delete_btn {
+                background-color: transparent;
+                color: #94A3B8;
+                border: none;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton#attachment_delete_btn:hover {
+                color: #F87171;
+            }
+            QPushButton#attachment_clear_all {
+                background-color: transparent;
+                color: #94A3B8;
+                border: 1px solid #374151;
+                border-radius: 4px;
+                font-size: 10px;
+                padding: 2px 6px;
+            }
+            QPushButton#attachment_clear_all:hover {
+                color: #F87171;
                 border-color: #EF4444;
             }
             QPushButton#chat_stop_button {
@@ -869,18 +945,183 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         elif not self._stream_timer.isActive():
             self._stream_timer.start(40)
 
+    def _prompt_add_image(self):
+        menu = QtWidgets.QMenu(self.image_button)
+        act_file = menu.addAction("📁 Choose Image File…")
+        act_cap = menu.addAction("📸 Capture PyMOL Viewport")
+        act_paste = menu.addAction("📋 Paste from Clipboard")
+        if self._pending_images:
+            menu.addSeparator()
+            act_clear = menu.addAction("✕ Clear Attachments")
+            act_clear.triggered.connect(self._clear_pending_images)
+
+        act_file.triggered.connect(self._choose_image_file)
+        act_cap.triggered.connect(self._capture_viewport)
+        act_paste.triggered.connect(self._paste_image_from_clipboard)
+
+        menu.exec_(self.image_button.mapToGlobal(QtCore.QPoint(0, self.image_button.height())))
+
+    def _choose_image_file(self):
+        file_paths, _ = QtWidgets.QFileDialog.getOpenFileNames(
+            self,
+            "Select Image Files",
+            "",
+            "Image Files (*.png *.jpg *.jpeg *.webp *.bmp *.tif *.tiff);;All Files (*.*)",
+        )
+        if file_paths:
+            for p in file_paths:
+                self._add_pending_image(p)
+
+    def _capture_viewport(self):
+        try:
+            from .image_utils import capture_pymol_viewport
+            cap_path = capture_pymol_viewport()
+            if cap_path and cap_path.is_file():
+                self._add_pending_image(cap_path, name=cap_path.name)
+            else:
+                self.show_error("Could not capture PyMOL viewport (scene may be empty or uninitialized).")
+        except Exception as exc:
+            self.show_error(f"Viewport capture failed: {exc}")
+
+    def _paste_image_from_clipboard(self):
+        clipboard = QtWidgets.QApplication.clipboard()
+        mime = clipboard.mimeData()
+        if mime.hasImage():
+            img = clipboard.image()
+            if not img.isNull():
+                self._add_pending_image(img, name="Clipboard Image")
+                return
+        if mime.hasUrls():
+            from .image_utils import is_image_file
+            img_urls = [u.toLocalFile() for u in mime.urls() if is_image_file(u.toLocalFile())]
+            if img_urls:
+                for p in img_urls:
+                    self._add_pending_image(p)
+                return
+        self.show_error("No image found in clipboard.")
+
+    def _on_images_dropped(self, paths: list):
+        for p in paths:
+            self._add_pending_image(p)
+
+    def _add_pending_image(self, source: Any, name: str | None = None):
+        try:
+            from .image_utils import encode_image_to_data_url
+            data_url = encode_image_to_data_url(source)
+            pixmap = QtGui.QPixmap()
+            if isinstance(source, (str, Path)):
+                pixmap.load(str(source))
+                item_name = name or Path(source).name
+            elif isinstance(source, QtGui.QPixmap):
+                pixmap = source
+                item_name = name or f"Image {len(self._pending_images) + 1}"
+            elif isinstance(source, QtGui.QImage):
+                pixmap = QtGui.QPixmap.fromImage(source)
+                item_name = name or f"Image {len(self._pending_images) + 1}"
+            else:
+                import base64
+                if isinstance(data_url, str) and "," in data_url:
+                    b64_part = data_url.split(",", 1)[1]
+                    raw_bytes = base64.b64decode(b64_part)
+                    pixmap.loadFromData(raw_bytes)
+                item_name = name or f"Image {len(self._pending_images) + 1}"
+
+            if pixmap.isNull():
+                return
+
+            self._pending_images.append({
+                "name": item_name,
+                "data_url": data_url,
+                "pixmap": pixmap,
+                "source": source if isinstance(source, (str, Path)) else None,
+            })
+            self._refresh_attachment_bar()
+        except Exception as exc:
+            self.show_error(f"Failed to load image: {exc}")
+
+    def _refresh_attachment_bar(self):
+        while self.attachment_layout.count():
+            item = self.attachment_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
+
+        if not self._pending_images:
+            self.attachment_bar.setVisible(False)
+            return
+
+        for idx, img_info in enumerate(self._pending_images):
+            card = QtWidgets.QFrame()
+            card.setObjectName("attachment_card")
+            card_layout = QtWidgets.QHBoxLayout(card)
+            card_layout.setContentsMargins(6, 4, 6, 4)
+            card_layout.setSpacing(6)
+
+            thumb_lbl = QtWidgets.QLabel()
+            scaled_pix = img_info["pixmap"].scaled(
+                34, 34, QtCore.Qt.KeepAspectRatio, QtCore.Qt.SmoothTransformation
+            )
+            thumb_lbl.setPixmap(scaled_pix)
+            thumb_lbl.setFixedSize(34, 34)
+            thumb_lbl.setAlignment(QtCore.Qt.AlignCenter)
+            card_layout.addWidget(thumb_lbl)
+
+            disp_name = img_info["name"]
+            if len(disp_name) > 16:
+                disp_name = disp_name[:13] + "…"
+            name_lbl = QtWidgets.QLabel(disp_name)
+            name_lbl.setObjectName("attachment_name")
+            name_lbl.setToolTip(img_info["name"])
+            card_layout.addWidget(name_lbl)
+
+            del_btn = QtWidgets.QPushButton("✕")
+            del_btn.setObjectName("attachment_delete_btn")
+            del_btn.setFixedSize(18, 18)
+            del_btn.setToolTip("Remove image")
+            del_btn.setCursor(QtCore.Qt.PointingHandCursor)
+            del_btn.clicked.connect(lambda checked=False, i=idx: self._remove_pending_image(i))
+            card_layout.addWidget(del_btn)
+
+            self.attachment_layout.addWidget(card)
+
+        self.attachment_layout.addStretch(1)
+
+        if len(self._pending_images) > 1:
+            clear_all_btn = QtWidgets.QPushButton("Clear all")
+            clear_all_btn.setObjectName("attachment_clear_all")
+            clear_all_btn.setCursor(QtCore.Qt.PointingHandCursor)
+            clear_all_btn.clicked.connect(self._clear_pending_images)
+            self.attachment_layout.addWidget(clear_all_btn)
+
+        self.attachment_bar.setVisible(True)
+
+    def _remove_pending_image(self, index: int):
+        if 0 <= index < len(self._pending_images):
+            self._pending_images.pop(index)
+            self._refresh_attachment_bar()
+
+    def _clear_pending_images(self):
+        self._pending_images.clear()
+        self._refresh_attachment_bar()
+
     def send(self):
         text = self.input.text().strip()
-        if not text or self.busy:
+        pending_imgs = list(self._pending_images)
+        if (not text and not pending_imgs) or self.busy:
             return
         if not self._ensure_api_key():
             return
         self.speech.stop()
         self.input.clear()
+        self._clear_pending_images()
         self._streaming = False
         self._cancelled_task = False
         self._auto_scroll = True
-        self._append_message("You", text)
+
+        display_text = text if text else "请分析附带的图片，并在 PyMOL 中执行相应的操作。"
+        image_data_urls = [item["data_url"] for item in pending_imgs]
+
+        self._append_message("You", display_text, images=image_data_urls)
         self._set_busy(True)
         try:
             agent = self._ensure_agent()
@@ -890,7 +1131,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             return
 
         mode = self.settings.value("thinking_mode", thinking_mode(), type=str)
-        will_think = should_enable_thinking(text, mode)
+        will_think = should_enable_thinking(display_text, mode)
         initial_state = "thinking" if will_think else "processing"
 
         self._active_turn = {
@@ -910,7 +1151,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self._thinking_timer.start()
         self._render_history(scroll_to_bottom=True)
 
-        task = Task(agent.ask, text)
+        task = Task(agent.ask, display_text, image_data_urls)
         task.signals.done.connect(self._answer_received)
         task.signals.failed.connect(self._task_failed)
         self.thread_pool.start(task)
@@ -995,9 +1236,34 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         super().keyPressEvent(event)
 
     def eventFilter(self, obj, event):
-        if event.type() == QtCore.QEvent.KeyPress and event.key() == QtCore.Qt.Key_Escape and self.busy:
-            self.cancel()
-            return True
+        if event.type() == QtCore.QEvent.KeyPress:
+            if event.key() == QtCore.Qt.Key_Escape and self.busy:
+                self.cancel()
+                return True
+
+            # Intercept Ctrl+V if clipboard has an image or copied image files
+            is_paste = False
+            if event.matches(QtGui.QKeySequence.Paste):
+                is_paste = True
+            elif (event.modifiers() & QtCore.Qt.ControlModifier) and event.key() == QtCore.Qt.Key_V:
+                is_paste = True
+
+            if is_paste:
+                clipboard = QtWidgets.QApplication.clipboard()
+                mime = clipboard.mimeData()
+                if mime.hasImage():
+                    img = clipboard.image()
+                    if not img.isNull():
+                        self._add_pending_image(img, name="Clipboard Image")
+                        return True
+                elif mime.hasUrls():
+                    from .image_utils import is_image_file
+                    img_urls = [u.toLocalFile() for u in mime.urls() if is_image_file(u.toLocalFile())]
+                    if img_urls:
+                        for p in img_urls:
+                            self._add_pending_image(p)
+                        return True
+
         if hasattr(self, "history") and (
             obj == self.history or (hasattr(self.history, "viewport") and obj == self.history.viewport())
         ):
@@ -1272,12 +1538,25 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         content = self._format_content(text)
 
         if who == "You":
+            images_html = ""
+            images = msg.get("images", [])
+            if images:
+                img_tags = []
+                for img_url in images:
+                    img_tags.append(
+                        f'<div style="margin: 6px 6px 2px 0; display: inline-block;">'
+                        f'<img src="{img_url}" style="max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid #5B45B2;" />'
+                        f'</div>'
+                    )
+                images_html = f'<div style="margin-top: 6px; margin-bottom: 2px;">{"".join(img_tags)}</div>'
+
             return (
                 '<table width="100%" cellpadding="9" cellspacing="0" style="margin-bottom: 8px;" bgcolor="#28233C">'
                 '<tr><td style="border: 1px solid #433966; border-radius: 8px;">'
                 '<div style="color: #A78BFA; font-size: 11px; font-weight: bold; margin-bottom: 4px;">'
                 '👤 You</div>'
                 f'<div style="color: #F8FAFC; font-size: 13px; line-height: 150%;">{content}</div>'
+                f'{images_html}'
                 '</td></tr></table>'
             )
         elif who == "PyMOL":
@@ -1569,7 +1848,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         finally:
             self._rendering_history = False
 
-    def _append_message(self, who: str, text: str):
+    def _append_message(self, who: str, text: str, images: list[str] | None = None):
         thought = getattr(text, "thought", "")
         t_dur = getattr(text, "thought_duration", 0.0)
         e_dur = getattr(text, "exec_duration", 0.0)
@@ -1580,6 +1859,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             "id": len(self._messages),
             "who": who,
             "text": str(text),
+            "images": images or [],
             "thought": thought,
             "thought_duration": t_dur,
             "exec_duration": e_dur,
@@ -1594,6 +1874,8 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.busy = busy
         self.input.setEnabled(not busy)
         self.mic_button.setEnabled(not busy)
+        if hasattr(self, "image_button"):
+            self.image_button.setEnabled(not busy)
         self.stop_button.setVisible(busy)
         if hasattr(self, "cancel_action"):
             self.cancel_action.setEnabled(busy)

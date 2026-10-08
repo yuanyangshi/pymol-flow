@@ -20,6 +20,7 @@ from ..config import (
     thinking_mode as config_thinking_mode,
 )
 from ..executor import PyMOLExecutor
+from ..image_utils import encode_image_to_data_url
 from .prompts import SYSTEM_PROMPT
 from .router import should_enable_thinking
 from .tools import TOOLS, can_confirm_directly
@@ -194,9 +195,28 @@ class PyMOLAgent:
         if len(user_indices) > 1:
             for idx in user_indices[:-1]:
                 content = self.messages[idx].get("content", "")
-                if "Current live scene:" in content and "\n\nUser request: " in content:
-                    clean_req = content.split("\n\nUser request: ", 1)[-1].strip()
-                    self.messages[idx]["content"] = clean_req
+                if isinstance(content, str):
+                    if "Current live scene:" in content and "\n\nUser request: " in content:
+                        clean_req = content.split("\n\nUser request: ", 1)[-1].strip()
+                        self.messages[idx]["content"] = clean_req
+                elif isinstance(content, list):
+                    # Multi-modal list of blocks: [{"type": "text", ...}, {"type": "image_url", ...}]
+                    new_blocks = []
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            txt = block.get("text", "")
+                            if "Current live scene:" in txt and "\n\nUser request: " in txt:
+                                txt = txt.split("\n\nUser request: ", 1)[-1].strip()
+                            new_blocks.append({"type": "text", "text": txt})
+                        elif isinstance(block, dict) and block.get("type") == "image_url":
+                            # Compact bulky historical image payloads to lightweight token placeholders
+                            new_blocks.append({
+                                "type": "text",
+                                "text": "[Image: Previously provided in earlier turn]",
+                            })
+                        else:
+                            new_blocks.append(block)
+                    self.messages[idx]["content"] = new_blocks
 
         # 2. Compact bulky historical tool messages (older than current active turn)
         for m in self.messages[:-2]:
@@ -223,7 +243,11 @@ class PyMOLAgent:
             topics = []
             for disc in discarded:
                 txt = disc.get("content", "")
-                if isinstance(txt, str) and any(kw in txt.lower() for kw in ("load", "align", "preset", "plddt", "heatmap", "rmsd", "fetch", "sele")):
+                if isinstance(txt, list):
+                    txt = " ".join(
+                        b.get("text", "") for b in txt if isinstance(b, dict) and b.get("type") == "text"
+                    )
+                if isinstance(txt, str) and any(kw in txt.lower() for kw in ("load", "align", "preset", "plddt", "heatmap", "rmsd", "fetch", "sele", "image")):
                     topics.append(txt[:50].replace("\n", " "))
 
             tail = self.messages[-keep_count:]
@@ -242,7 +266,7 @@ class PyMOLAgent:
         self._compact_conversation_history()
 
 
-    def ask(self, user_text: str) -> AgentReply:
+    def ask(self, user_text: str, images: list[Any] | None = None) -> AgentReply:
         self._cancelled = False
         t_start = time.time()
         t_thought_end: float | None = None
@@ -271,7 +295,21 @@ class PyMOLAgent:
 
         scene = json.dumps(self.executor.scene_summary(), separators=(",", ":"))
         user_prompt = f"Current live scene: {scene}\n\nUser request: {user_text}"
-        self.messages.append({"role": "user", "content": user_prompt})
+
+        if images:
+            content_blocks: list[dict[str, Any]] = [{"type": "text", "text": user_prompt}]
+            for img in images:
+                try:
+                    data_url = encode_image_to_data_url(img)
+                    content_blocks.append({
+                        "type": "image_url",
+                        "image_url": {"url": data_url},
+                    })
+                except Exception as exc:
+                    self.debug(f"[Image Error] Failed to encode image: {exc}")
+            self.messages.append({"role": "user", "content": content_blocks})
+        else:
+            self.messages.append({"role": "user", "content": user_prompt})
 
         thinking_mode = getattr(self, "enable_thinking", None)
         if thinking_mode is None:
@@ -287,7 +325,7 @@ class PyMOLAgent:
         on_thought_cb = getattr(self, "on_thought", None)
         on_tool_cb = getattr(self, "on_tool_call", None)
 
-        if is_pure_greeting(user_text):
+        if not images and is_pure_greeting(user_text):
             scene_info = self.executor.scene_summary()
             greeting_text = generate_greeting_reply(self.messages, scene_info)
             if on_token_cb:
@@ -531,6 +569,64 @@ class PyMOLAgent:
                         self.messages.append({"role": "assistant", "content": confirmation})
                         self._truncate_history_if_needed()
                         return build_reply(confirmation, 1)
+                elif fn_name == "align_structures":
+                    mobile_obj = arguments.get("mobile_object") or ""
+                    target_obj = arguments.get("target_object") or ""
+                    mode = arguments.get("mode") or "auto"
+                    lig_sel = arguments.get("ligand_selection") or "organic and not solvent"
+                    focus_pock = bool(arguments.get("focus_pocket", True))
+                    self.debug(f">>> align_structures(mobile={mobile_obj}, target={target_obj}, mode={mode}, ligand={lig_sel}, focus_pocket={focus_pock})")
+                    t_tool_0 = time.time()
+                    try:
+                        from ..analysis import align_structures
+                        cmd_api = getattr(self.executor, "safe_cmd", None)
+                        aln_res = align_structures(
+                            mobile_object=mobile_obj,
+                            target_object=target_obj,
+                            mode=mode,
+                            ligand_selection=lig_sel,
+                            focus_pocket=focus_pock,
+                            cmd_override=cmd_api,
+                        )
+                        md_report = aln_res.to_markdown()
+                        tool_ok = aln_res.success
+                        tool_err = aln_res.warning or ""
+                        tool_output = aln_res.to_summary_sentence()
+                        full_content = md_report
+                    except Exception as exc:
+                        tool_output = ""
+                        tool_ok = False
+                        tool_err = str(exc)
+                        full_content = f"对齐执行异常: {exc}"
+
+                    t_tool_dur = max(0.01, time.time() - t_tool_0)
+                    tool_record = {
+                        "name": fn_name,
+                        "code": f"align_structures('{mobile_obj}', '{target_obj}', mode='{mode}')",
+                        "ok": tool_ok,
+                        "output": tool_output,
+                        "error": tool_err,
+                        "duration": t_tool_dur,
+                    }
+                    executed_tools.append(tool_record)
+                    if on_tool_cb:
+                        on_tool_cb(tool_record)
+
+                    tool_content = json.dumps({"ok": tool_ok, "output": tool_output, "error": tool_err})
+                    self.messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": tool_content,
+                    })
+
+                    if full_content and len(tool_calls_list) == 1:
+                        if on_token_cb:
+                            for chunk in re.split(r"([，。、\n\s]+)", full_content):
+                                if chunk:
+                                    on_token_cb(chunk)
+                        self.messages.append({"role": "assistant", "content": full_content})
+                        self._truncate_history_if_needed()
+                        return build_reply(full_content, _step + 1)
                 elif fn_name == "analyze_protein_ligand_interactions":
                     ligand = arguments.get("ligand") or "organic"
                     receptor = arguments.get("receptor") or "polymer.protein"

@@ -4,9 +4,9 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
 [![PyMOL: 2.x | 3.x](https://img.shields.io/badge/PyMOL-2.x%20%7C%203.x-orange.svg)](https://pymol.org)
-[![Tests: 111 Passed](https://img.shields.io/badge/Tests-111%20Passed-success.svg)](tests/)
+[![Tests: 131 Passed](https://img.shields.io/badge/Tests-131%20Passed-success.svg)](tests/)
 
-**PyMOL Flow** is a Windows-native AI copilot embedded directly into PyMOL for structural biology and computer-aided drug design (CADD). It translates natural language and speech into validated PyMOL workflows, providing automated pocket interaction profiling, conformational displacement heatmaps, AlphaFold pLDDT confidence analysis, and publication-grade molecular rendering.
+**PyMOL Flow** is a Windows-native AI copilot embedded directly into PyMOL for structural biology and computer-aided drug design (CADD). It translates natural language, multimodal image inputs, and speech into validated PyMOL workflows, providing automated pocket interaction profiling, conformational displacement heatmaps, AlphaFold pLDDT confidence analysis, and publication-grade molecular rendering.
 
 ---
 
@@ -14,6 +14,8 @@
 
 | Module | Function | Description |
 | :--- | :--- | :--- |
+| **Intelligent Alignment** | `align_structures` | Autonomously aligns monomers, dimers, trimers, and oligomers; resolves C2/C3 rotational symmetry permutations, interfaces ligand/pocket awareness, and handles uneven chain lengths or flexible tails. |
+| **Multimodal Vision** | `image_utils` / `ask(..., images)` | Ingests structural biology figures, docking snapshots, clipboard screenshots (Ctrl+V), and live PyMOL viewport captures for visual reasoning. |
 | **Viewport Reactivity** | `get_viewport_selection_summary` | Real-time 3D selection awareness (`sele`); dynamically surfaces residue/ligand action pills in the UI upon viewport click events. |
 | **Conformation Analysis** | `compare_conformations` | Calculates Cα and pocket-level RMSD, isolates active-site residues, and renders a 3D continuous displacement vector heatmap (blue-white-red spectrum on B-factors). |
 | **Model Confidence** | `visualize_plddt` | Maps official AlphaFold & ESMFold 4-tier confidence intervals (pLDDT >90, 70–90, 50–70, <50) with automated disorder loop filtering. |
@@ -23,8 +25,9 @@
 
 ### Technical Architecture
 
+- **Multimodal Visual Grounding**: Direct clipboard image pasting (`Ctrl+V`), drag-and-drop image import, and native viewport snapshot extraction (`cmd.png`) automatically encode and downscale visual context into OpenAI-compatible `image_url` data structures.
 - **Bidirectional 3D Viewport Reactivity**: Background Qt event polling tracks mouse clicks in PyMOL's 3D canvas, immediately transforming quick action pills for inspected residues or ligands.
-- **Prompt Caching & Conversation Compaction**: Invariant system prefix structures, historical scene dump stripping, and automated tool output compaction maximize LLM prompt cache hit rates and slash token costs.
+- **Prompt Caching & Conversation Compaction**: Invariant system prefix structures, historical scene dump stripping, automated tool output compaction, and image payload token placeholders maximize prompt cache hits and avoid payload bloating.
 - **Sandboxed Execution Engine**: Python AST validation restricts unsafe system calls (`os`, `sys`, `subprocess`, unauthorized socket/network access) prior to execution.
 - **Fail-Safe Circuit Breaker**: Bounded tool execution turns (`MAX_TOOL_ROUNDS = 4`) prevent runaway retries. Visual operations are automatically protected by exception recovery.
 - **Enterprise Credential Storage**: Native Windows Credential Manager integration (`io.pymolflow.credentials`) ensures API keys are never written to plain-text sessions or Git history.
@@ -38,7 +41,7 @@
 pymol_flow/
 ├── __init__.py           # Plugin registration and Qt dock widget mounting
 ├── agent/                # Multi-turn conversational loop, token caching, circuit breaker
-│   ├── core.py           # Agent loop, streaming, and tool dispatch
+│   ├── core.py           # Agent loop, multimodal streaming, and tool dispatch
 │   ├── prompts.py        # System prompt and PyMOL selection algebra rules
 │   ├── router.py         # Query classifier (fast geometric commands vs. deep reasoning)
 │   └── tools.py          # Tool definitions and JSON schemas
@@ -48,6 +51,7 @@ pymol_flow/
 │   ├── safety.py         # AST syntax validator
 │   └── scene.py          # Viewport introspection and object census
 ├── analysis/             # Structural biology and CADD calculation modules
+│   ├── align.py          # Intelligent multimer alignment, symmetry detection & chain mapping
 │   ├── conformation.py   # Pocket RMSD and 3D B-factor displacement heatmap
 │   ├── interactions.py   # Pocket non-covalent contact profiler
 │   ├── loader.py         # Batch file loader with natural sorting
@@ -57,8 +61,10 @@ pymol_flow/
 │   └── speech.py         # Voice queue and TTS output
 ├── api_client.py         # Unified DashScope / OpenAI streaming HTTP client
 ├── config.py             # Configuration and environment variable loader
+├── image_utils.py        # Image encoding, downscaling, and PyMOL viewport capture
 ├── keychain.py           # Windows Credential Manager ctypes interface
-└── ui.py                 # PyMOL Qt dock widget, history renderer, and action controls
+└── ui.py                 # PyMOL Qt dock widget, history renderer, attachment preview bar
+```
 ```
 
 ---
@@ -148,6 +154,15 @@ DASHSCOPE_MODEL=qwen3.8-flash
 ```
 *(Folders and files can also be dragged directly into the chat window).*
 
+### 7. Multimodal Visual Input & Figure Analysis
+- **Clipboard Paste (`Ctrl+V`)**: Take a screenshot of a paper figure or pocket snapshot and press `Ctrl+V` in the chat window to attach it immediately.
+- **Drag & Drop**: Drag image files (`.png`, `.jpg`, `.webp`) straight into the dock panel.
+- **Image Button (`🖼`)**: Click to choose image files, paste from clipboard, or capture the current PyMOL 3D viewport in one click (`📸 Capture PyMOL Viewport`).
+```text
+"Inspect the pocket residues indicated in this figure and display them as sticks in the active structure."
+"Compare the ligand binding pose in this image with our docked conformation."
+```
+
 ---
 
 ## Verification
@@ -156,7 +171,7 @@ Execute the test suite:
 ```cmd
 python -m unittest discover -s tests -v
 ```
-All 111 automated tests validate AST security sandboxing, multi-turn agent logic, coordinate calculations, publication presets, and credential management.
+All 131 automated tests validate AST security sandboxing, multimodal image handling, multi-turn agent logic, coordinate calculations, publication presets, and credential management.
 
 ---
 
