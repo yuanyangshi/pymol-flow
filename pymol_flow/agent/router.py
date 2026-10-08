@@ -48,7 +48,7 @@ def should_enable_thinking(user_text: str, mode: str | bool = "auto") -> bool:
     # Tier 2: Disambiguate pure imperative directives vs analytical interrogatives
     analytical_markers = [
         "为什么", "为何", "怎么看", "评价", "评估", "分析", "预测", "机理", "机制",
-        "原因", "差异在哪", "有何差异", "哪个好", "哪个更", "有何不同", "推测", "推断", "优劣",
+        "原因", "差异在哪", "有何差异", "哪个好", "哪个更", "哪个", "更有利", "优于", "优选", "有何不同", "推测", "推断", "优劣",
         "是否可能", "会怎样", "依据", "如何解释", "情况", "状态", "差异在哪", "看一下", "帮我看看", "帮我看",
         "区别", "如何", "怎样", "对比", "比较", "看看", "怎么样",
         "why", "how come", "explain", "compare", "evaluate", "assess", "hypothesize",
@@ -58,17 +58,30 @@ def should_enable_thinking(user_text: str, mode: str | bool = "auto") -> bool:
     has_analytical_intent = any(marker in text for marker in analytical_markers)
 
     is_imperative_directive = (
-        re.search(r"^(把|将|给|让|请把|请将).*?(标|变|设|显|改|染|画|涂|展示|放大|缩小|对齐|隐藏|显示|居中|旋转|加载|下载)", text) is not None
-        or re.search(r"^(对齐|对准|重置|放大|缩小|旋转|居中|显示|隐藏|高亮|标红|标绿|染色|下载|加载)", text) is not None
-        or re.search(r"^(align|super|cealign|color|show|hide|zoom|orient|center|reset|fetch|select|label|turn|move)\b", text) is not None
+        re.search(
+            r"^(把|将|给|让|为|帮|请把|请将|请为|请帮).*?(标|变|设|显|改|染|画|涂|展示|放大|缩小|对齐|隐藏|显示|居中|旋转|加载|下载|选中|选择|聚焦|定位)",
+            text,
+        ) is not None
+        or re.search(
+            r"^(对齐|对准|重置|放大|缩小|旋转|居中|显示|隐藏|高亮|标红|标绿|染色|下载|加载|选中|选择|聚焦|定位|查看|设置|调整|清除|删除|切换|缩放|保存|导出|居中对齐|居中聚焦|显示为|设为|标出)",
+            text,
+        ) is not None
+        or re.search(
+            r"^(align|super|cealign|color|show|hide|zoom|orient|center|reset|fetch|select|label|turn|move|delete|remove|set)\b",
+            text,
+        ) is not None
     )
 
     if is_imperative_directive and not has_analytical_intent:
         return False
 
     # Tier 3: Scientific epistemic & relational reasoning
-    if has_analytical_intent:
-        return True
+    # In auto mode, deliberate reasoning is only engaged when there is an explicit analytical question
+    # (e.g. asking "为什么", "机理", "比较差异", "评估选择性") about scientific domain concepts.
+    # Procedural commands, state feedback, or scene descriptions without analytical interrogatives
+    # stay in Fast Mode (False).
+    if not has_analytical_intent:
+        return False
 
     domain_reasoning_concepts = [
         "选择性", "差异", "耐药", "构效关系", "sar", "亲和力", "结合力",

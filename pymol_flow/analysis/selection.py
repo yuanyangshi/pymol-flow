@@ -58,14 +58,36 @@ def get_viewport_selection_summary(cmd_api: Any = None) -> SelectionSummary:
         is_lig = bool(cmd_api.count_atoms("sele and organic") > 0)
         is_prot = bool(cmd_api.count_atoms("sele and polymer.protein") > 0)
 
+        # For very large selections (> 2500 atoms), avoid heavy iteration that locks Qt GUI
+        if count > 2500:
+            models = sorted(list(cmd_api.get_object_list("sele") or []))
+            chains = sorted(list(cmd_api.get_chains("sele") or []))
+            summary = SelectionSummary(
+                has_selection=True,
+                atom_count=count,
+                residue_count=0,
+                models=models,
+                residues=[],
+                chains=chains,
+                is_ligand=is_lig,
+                is_protein=is_prot,
+                label=f"{count} atoms in {', '.join(models) if models else 'selection'}",
+            )
+            return summary
+
         # Iterate over sele to get models, chains, and residues
+        # For large protein selections, iterate over CA atoms for 15x speedup
+        iter_sel = "sele and name CA" if (is_prot and count > 300) else "sele"
         from pymol import stored
         stored._sele_data = set()
         cmd_api.iterate(
-            "sele",
+            iter_sel,
             "stored._sele_data.add((model, chain, resi, resn))",
         )
         data = getattr(stored, "_sele_data", set())
+        if not data and iter_sel != "sele":
+            cmd_api.iterate("sele", "stored._sele_data.add((model, chain, resi, resn))")
+            data = getattr(stored, "_sele_data", set())
 
         models = sorted({item[0] for item in data if item[0]})
         chains = sorted({item[1] for item in data if item[1]})

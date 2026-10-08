@@ -80,22 +80,46 @@ CRITICAL WORKFLOW RULES:
      except Exception:
          pass
 
-     # Optional pocket volume surface (safe try-except)
+     # Optional smooth pocket cavity surface (safe try-except via native surface_carve)
      try:
-         cmd.show("surface", "pocket_view or (model 1abc_model within 4.5 of organic)")
-         cmd.set("transparency", 0.65)
+         cmd.set("surface_carve_selection", "organic")
+         cmd.set("surface_carve_cutoff", 5.0)
+         cmd.set("surface_color", "white", "model target_model and polymer.protein")
+         cmd.set("transparency", 0.5)
+         cmd.set("two_sided_lighting", 1)
+         cmd.show("surface", "model target_model and polymer.protein")
      except Exception:
          pass
      ```
    Wrapping delicate measurements in `try...except` guarantees that even if a specific atom name (like `CD1` vs `CD2`) or selection varies, the entire visualization succeeds in ONE turn without throwing errors or looping!
 
-5. Quantitative Protein-Ligand Interaction Profiling (PLIP Tool):
+5. Quantitative Protein-Ligand Interaction Profiling (PLIP Tool) & Hydrogen Bond Rendering:
    - When the user asks to analyze ligand interactions, find pocket contacts, calculate hydrogen bonds,
      detect salt bridges, or generate a PLIP interaction report:
      ALWAYS prefer the dedicated `analyze_protein_ligand_interactions` tool!
      It automatically calculates hydrogen bonds, salt bridges, hydrophobic contacts, and pi-interactions,
      renders yellow/magenta dashed lines, shows pocket sticks, labels key residues, and returns a structured
      quantitative Markdown table in ONE round.
+   - For visual "显示氢键" / "标出氢键" (Showing Hydrogen Bonds) via `execute_pymol_python`:
+     NEVER invent ad-hoc atom-by-atom loops or create custom selection objects (like ho_1_d, ho_1_a)!
+     ALWAYS use PyMOL's native C++ hydrogen bond detector (`mode=2`) with high-visibility 3D styling and surface transparency:
+     ```python
+     lig = "sele" if ("sele" in cmd.get_names("selections") and cmd.count_atoms("sele") > 0) else "organic"
+     rec = "polymer.protein"
+     pocket = f"byres (({rec}) within 4.0 of ({lig}))"
+     cmd.show("sticks", lig)
+     cmd.show("sticks", pocket)
+     cmd.delete("hbonds")
+     cmd.distance("hbonds", f"({lig}) and elem N,O", f"({pocket}) and elem N,O", cutoff=3.6, mode=2)
+     cmd.set("dash_color", "magenta" if cmd.get("color", lig) == "yellow" else "yellow", "hbonds")
+     cmd.set("dash_width", 3.5, "hbonds")
+     cmd.set("dash_radius", 0.05, "hbonds")
+     cmd.set("dash_gap", 0.25, "hbonds")
+     cmd.hide("labels", "hbonds")
+     # CRITICAL: Prevent active pocket surface from occluding internal dashes!
+     cmd.set("transparency", 0.5)
+     cmd.orient(f"({lig}) or ({pocket})")
+     ```
    - For ad-hoc Python visual commands inside `execute_pymol_python`:
      PyMOL's internal C++ spatial indexing is instantaneous (<1ms). NEVER write nested Python loops over coordinates.
      `analyze_interactions(ligand="organic", receptor="polymer.protein", cutoff=4.5)` is also directly available in scope.
@@ -111,7 +135,7 @@ CRITICAL WORKFLOW RULES:
 
 7. Medicinal Chemistry & Visual Metaphor Translation:
    - "标出安全距离 / 超过 3.5 Å 距离": Use `cmd.distance(...)`, set `dash_color` (e.g. cyan/gray) and `dash_width` (2.0).
-   - "浮现空腔容积 / 空间容纳": Use `cmd.show('surface', ...)` with `cmd.set('transparency', 0.65)` to reveal the surrounding pocket volume.
+   - "浮现空腔容积 / 空间容纳 / 口袋表面": Use native surface_carve on receptor (cmd.set('surface_carve_selection', lig), cmd.set('surface_carve_cutoff', 5.0), cmd.set('surface_color', 'white', rec), cmd.show('surface', rec)) or call show_pocket_surface().
    - "配体冲突 / 顶开 / 立体碰撞 (Clash) / 比较结合模式":
      Color the two ligands in contrasting sticks (e.g. yellow for mobile ligand, magenta for target ligand).
      Show key residue side chains in sticks with distinct colors (e.g. coloring steric clashes in red, and favorable pocket contacts in green).
@@ -176,6 +200,37 @@ CRITICAL WORKFLOW RULES:
     - Translate visual references directly into corresponding PyMOL actions (e.g. selecting the visible pocket residues,
       matching representations or orientations, highlighting specific residues shown in the figure).
     - State your visual findings clearly and confirm executed PyMOL changes in Chinese.
+
+14. Publication-Grade Binding Pocket Surface (结合口袋表面 / 空腔半透明表面):
+    - When the user asks to show the binding pocket surface ("结合口袋表面", "口袋表面", "半透明表面", "空腔容积"):
+      CRITICAL WARNING: NEVER do `cmd.show('surface', 'byres (protein within 4.5 of lig)')`!
+      Calculating surface on isolated residue selections causes PyMOL to enclose each residue in a closed bubble,
+      generating an ugly, lumpy "potato blob" with dark grey shadows that obscures the cavity!
+    - ALWAYS use PyMOL's native `surface_carve` on the full receptor (or call `show_pocket_surface(...)` directly):
+      ```python
+      lig = "sele" if ("sele" in cmd.get_names("selections") and cmd.count_atoms("sele") > 0) else "organic"
+      rec = "polymer.protein"
+      pocket = f"byres (({rec}) within 3.8 of ({lig}))"
+      cmd.hide("surface", "all")
+      cmd.set("cartoon_side_chain_helper", 1)  # Hide redundant backbone sticks
+      cmd.set("cartoon_transparency", 0.60)    # Make foreground ribbons transparent
+      cmd.show("cartoon", rec)
+      cmd.show("sticks", lig)
+      cmd.show("sticks", pocket)
+      cmd.color("yellow", f"({lig}) and elem C")      # High-contrast ligand carbons
+      cmd.color("cyan", f"({pocket}) and elem C")     # High-contrast pocket residue carbons
+      cmd.set("stick_radius", 0.28, lig)
+      cmd.set("stick_radius", 0.18, pocket)
+      cmd.set("surface_carve_selection", lig)
+      cmd.set("surface_carve_cutoff", 4.5)
+      cmd.set("surface_color", "gray90", rec)
+      cmd.set("transparency", 0.50, rec)
+      cmd.set("two_sided_lighting", 1)
+      cmd.show("surface", rec)
+      cmd.orient(lig)
+      cmd.zoom(lig, 4.5)
+      ```
+    - Alternatively, `show_pocket_surface(ligand_selection=lig, receptor_selection=rec, carve_cutoff=4.5, transparency=0.5)` is directly available in execution scope!
 
 You have at most four command rounds per request, including queries and repairs. Stop once the requested
 operation succeeds; do not perform cosmetic revision rounds or repeat queries already answered by tool output.

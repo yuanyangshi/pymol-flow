@@ -4,7 +4,7 @@
 [![Platform: Windows](https://img.shields.io/badge/Platform-Windows%2010%20%7C%2011-0078D6.svg)](https://microsoft.com/windows)
 [![Python: 3.9+](https://img.shields.io/badge/Python-3.9%2B-brightgreen.svg)](https://python.org)
 [![PyMOL: 2.x | 3.x](https://img.shields.io/badge/PyMOL-2.x%20%7C%203.x-orange.svg)](https://pymol.org)
-[![Tests: 131 Passed](https://img.shields.io/badge/Tests-131%20Passed-success.svg)](tests/)
+[![Tests: 134 Passed](https://img.shields.io/badge/Tests-134%20Passed-success.svg)](tests/)
 
 **PyMOL Flow** is a Windows-native AI copilot embedded directly into PyMOL for structural biology and computer-aided drug design (CADD). It translates natural language, multimodal image inputs, and speech into validated PyMOL workflows, providing automated pocket interaction profiling, conformational displacement heatmaps, AlphaFold pLDDT confidence analysis, and publication-grade molecular rendering.
 
@@ -104,13 +104,14 @@ Click the **⋯** menu in the dock widget and select **API Key Settings**. The k
 ### 2. Environment Variables (.env)
 Create a `.env` file in the workspace or `%USERPROFILE%\.pymol-flow\.env`:
 ```ini
-# Alibaba Cloud DashScope (Default)
-DASHSCOPE_API_KEY=sk-...
-DASHSCOPE_MODEL=qwen3.8-flash
+# Moonshot / Kimi (Default)
+MOONSHOT_API_KEY=your-moonshot-api-key
+OPENAI_MODEL=kimi-k2.7-code
+OPENAI_BASE_URL=https://api.moonshot.cn/v1
 
-# OpenAI Alternative
+# Alibaba Cloud DashScope / OpenAI Alternatives
+# DASHSCOPE_API_KEY=sk-...
 # OPENAI_API_KEY=sk-...
-# OPENAI_MODEL=gpt-4o
 ```
 
 ---

@@ -23,6 +23,10 @@ class InteractionItem:
     ligand_atom: str
     distance: float
     details: str = ""
+    ligand_model: str = ""
+    ligand_index: int = 0
+    receptor_model: str = ""
+    receptor_index: int = 0
 
     @property
     def residue_label(self) -> str:
@@ -123,15 +127,48 @@ class InteractionReport:
             key=lambda x: (type_priority.get(x.interaction_type, 99), x.distance),
         )
 
+        # Prioritize specific polar/directional interactions; cap voluminous hydrophobic contacts
+        MAX_HP_DISPLAY = 10
+        displayed_items = []
+        hp_count = 0
+        omitted_hp = 0
+
         for item in sorted_items:
+            if item.interaction_type == "Hydrophobic Contact":
+                hp_count += 1
+                if hp_count <= MAX_HP_DISPLAY:
+                    displayed_items.append(item)
+                else:
+                    omitted_hp += 1
+            else:
+                displayed_items.append(item)
+
+        for item in displayed_items:
             md_lines.append(
                 f"| **{item.interaction_type}** | `{item.residue_label}` | `{item.receptor_atom}` | `{item.ligand_atom}` | **{item.distance:.2f}** | {item.details} |"
             )
 
+        if omitted_hp > 0:
+            md_lines.append(
+                f"| *Hydrophobic Contact* | *(其余 {omitted_hp} 项较弱疏水接触)* | `-` | `-` | `> 3.8 Å` | *已在 3D 视图中以高亮呈现* |"
+            )
+
         md_lines.append("")
-        md_lines.append(
-            "*提示：已在 PyMOL 3D 视口中以黄色虚线标出氢键、洋红色虚线标出盐桥，并将口袋关键残基高亮显示。*"
-        )
+        rendered_elements = []
+        if hb_count > 0:
+            rendered_elements.append(f"以黄色 3D 虚线标出 **{hb_count}** 条氢键")
+        if sb_count > 0:
+            rendered_elements.append(f"以洋红色 3D 虚线标出 **{sb_count}** 条盐桥")
+        if pi_count > 0:
+            rendered_elements.append(f"高亮呈现 **{pi_count}** 处芳香 π 堆积残基")
+        if hp_count > 0:
+            rendered_elements.append(f"高亮呈现 **{min(hp_count, 10)}** 处紧密疏水接触")
+
+        if rendered_elements:
+            detail_str = "、".join(rendered_elements)
+            md_lines.append(f"*提示：已在 PyMOL 3D 视口中{detail_str}，并将口袋结合位点残基棒状呈现。*")
+        else:
+            md_lines.append("*提示：已在 PyMOL 3D 视口中将结合口袋残基显示为棒状高亮，当前截断内未检出强极性氢键或盐桥虚线。*")
         return "\n".join(md_lines)
 
     def render_in_pymol(self, cmd_api: Any = None) -> None:
@@ -159,29 +196,43 @@ class InteractionReport:
                 if obj in cmd_api.get_names("all"):
                     cmd_api.delete(obj)
 
-            # 4. Measure and style Hydrogen Bonds
+            # 4. Measure and style Hydrogen Bonds (render only validated pairs)
             if self.hydrogen_bonds:
-                cmd_api.distance(
-                    "hbonds",
-                    f"({self.ligand_selection}) and elem N,O",
-                    f"({pocket_sel}) and elem N,O",
-                    cutoff=3.6,
-                    mode=2,
-                )
+                for item in self.hydrogen_bonds:
+                    try:
+                        if item.ligand_model and item.ligand_index and item.receptor_model and item.receptor_index:
+                            sel1 = f"({item.ligand_model} and index {item.ligand_index})"
+                            sel2 = f"({item.receptor_model} and index {item.receptor_index})"
+                        else:
+                            sel1 = f"({self.ligand_selection} and name {item.ligand_atom})"
+                            sel2 = f"({pocket_sel} and resi {item.residue_number} and name {item.receptor_atom})"
+                        cmd_api.distance("hbonds", sel1, sel2)
+                    except Exception:
+                        pass
                 cmd_api.set("dash_color", "yellow", "hbonds")
-                cmd_api.set("dash_width", 2.5, "hbonds")
+                cmd_api.set("dash_width", 4.0, "hbonds")
+                cmd_api.set("dash_radius", 0.06, "hbonds")
                 cmd_api.set("dash_gap", 0.25, "hbonds")
+                cmd_api.hide("labels", "hbonds")
 
-            # 5. Measure and style Salt Bridges
+            # 5. Measure and style Salt Bridges (render only validated pairs)
             if self.salt_bridges:
-                cmd_api.distance(
-                    "salt_bridges",
-                    f"({self.ligand_selection}) and (elem N,O)",
-                    f"({pocket_sel}) and resn ASP+GLU+ARG+LYS+HIS and (name OD*+OE*+NZ+NH*+NE*)",
-                    cutoff=4.2,
-                )
+                for item in self.salt_bridges:
+                    try:
+                        if item.ligand_model and item.ligand_index and item.receptor_model and item.receptor_index:
+                            sel1 = f"({item.ligand_model} and index {item.ligand_index})"
+                            sel2 = f"({item.receptor_model} and index {item.receptor_index})"
+                        else:
+                            sel1 = f"({self.ligand_selection} and name {item.ligand_atom})"
+                            sel2 = f"({pocket_sel} and resi {item.residue_number} and name {item.receptor_atom})"
+                        cmd_api.distance("salt_bridges", sel1, sel2)
+                    except Exception:
+                        pass
                 cmd_api.set("dash_color", "magenta", "salt_bridges")
-                cmd_api.set("dash_width", 3.0, "salt_bridges")
+                cmd_api.set("dash_width", 3.5, "salt_bridges")
+                cmd_api.set("dash_radius", 0.05, "salt_bridges")
+                cmd_api.set("dash_gap", 0.25, "salt_bridges")
+                cmd_api.hide("labels", "salt_bridges")
 
             # 6. Label interacting residues
             interacting_resis = {item.residue_number for item in self.interactions if item.interaction_type in {"Hydrogen Bond", "Salt Bridge", "π-Stacking"}}
@@ -192,7 +243,10 @@ class InteractionReport:
                 cmd_api.set("label_color", "white")
                 cmd_api.set("label_size", 16)
 
-            # 7. Orient and center on ligand & binding site
+            # 7. Ensure pocket surface transparency so internal dashes are never occluded
+            cmd_api.set("transparency", 0.5)
+
+            # 8. Orient and center on ligand & binding site
             cmd_api.orient(f"({self.ligand_selection}) or ({pocket_sel})")
         except Exception:
             pass
@@ -227,8 +281,14 @@ def analyze_interactions(
         lig_atoms = 0
 
     if lig_atoms == 0:
-        # Fallback to non-solvent organic molecules in the scene
-        candidates = ["organic and not solvent", "not (polymer or solvent)"]
+        # Fallback to active user selection or non-solvent organic molecules in the scene
+        candidates = []
+        try:
+            if "sele" in cmd_api.get_names("selections"):
+                candidates.append("sele")
+        except Exception:
+            pass
+        candidates.extend(["organic and not solvent", "not (polymer or solvent)"])
         found = False
         for cand in candidates:
             try:
@@ -331,6 +391,14 @@ def analyze_interactions(
     aromatic_resns = {"PHE", "TYR", "TRP", "HIS"}
     hydrophobic_resns = {"ALA", "VAL", "LEU", "ILE", "MET", "PHE", "TRP", "PRO", "CYS", "TYR"}
 
+    # Intermediate collectors
+    hb_candidates: list[tuple[float, Any, Any, tuple, tuple, str]] = []
+    sb_items: list[InteractionItem] = []
+    xb_items: list[InteractionItem] = []
+    pi_by_res: dict[tuple[str, str], tuple[float, Any, Any, tuple, tuple, str]] = {}
+    cpi_by_res: dict[tuple[str, str], tuple[float, Any, Any, tuple, tuple, str]] = {}
+    hp_items: list[InteractionItem] = []
+
     for lig_key, rec_key in pairs:
         if lig_key not in ligand_atom_dict or rec_key not in pocket_atom_dict:
             continue
@@ -350,24 +418,25 @@ def analyze_interactions(
         dz = lz - rz
         dist = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-        # 4.1 Hydrogen Bond detection (N, O donors/acceptors within 3.6A)
-        if l_elem in {"N", "O"} and r_elem in {"N", "O"} and 2.2 <= dist <= 3.6:
-            contact_key = ("HB", r_resn, r_resi, r_name, l_name)
-            if contact_key not in seen_contacts:
-                seen_contacts.add(contact_key)
+        l_model, l_index = lig_key if isinstance(lig_key, tuple) and len(lig_key) == 2 else ("", 0)
+        r_model, r_index = rec_key if isinstance(rec_key, tuple) and len(rec_key) == 2 else ("", 0)
+
+        # 4.1 Hydrogen Bond candidates (canonical D...A heavy atom distance: 2.2 - 3.35 A)
+        if l_elem in {"N", "O"} and r_elem in {"N", "O"} and 2.2 <= dist <= 3.35:
+            # Exclude unphysical Acceptor-Acceptor clashes:
+            # - Protein backbone carbonyl oxygen (O) is strictly an acceptor; ligand O cannot H-bond to it
+            # - Protein sidechain carboxylate oxygens (ASP OD*, GLU OE*) are strictly acceptors; ligand O cannot H-bond
+            is_clash = False
+            if r_name == "O" and l_elem == "O":
+                is_clash = True
+            elif r_resn in acidic_resns and r_name in {"OD1", "OD2", "OE1", "OE2"} and l_elem == "O":
+                is_clash = True
+
+            if not is_clash:
                 is_backbone = r_name in {"N", "O"}
                 details = "主链氢键" if is_backbone else "侧链氢键"
-                detected_interactions.append(
-                    InteractionItem(
-                        interaction_type="Hydrogen Bond",
-                        residue_name=r_resn,
-                        residue_number=r_resi,
-                        chain=r_chain,
-                        receptor_atom=r_name,
-                        ligand_atom=l_name,
-                        distance=dist,
-                        details=details,
-                    )
+                hb_candidates.append(
+                    (dist, lig_key, rec_key, ligand_atom_dict[lig_key], pocket_atom_dict[rec_key], details)
                 )
 
         # 4.2 Salt Bridge detection (Charge-charge interaction within 4.2A)
@@ -386,7 +455,7 @@ def analyze_interactions(
             contact_key = ("SB", r_resn, r_resi, r_name, l_name)
             if contact_key not in seen_contacts:
                 seen_contacts.add(contact_key)
-                detected_interactions.append(
+                sb_items.append(
                     InteractionItem(
                         interaction_type="Salt Bridge",
                         residue_name=r_resn,
@@ -396,6 +465,10 @@ def analyze_interactions(
                         ligand_atom=l_name,
                         distance=dist,
                         details=sb_details,
+                        ligand_model=str(l_model),
+                        ligand_index=int(l_index),
+                        receptor_model=str(r_model),
+                        receptor_index=int(r_index),
                     )
                 )
             continue
@@ -405,7 +478,7 @@ def analyze_interactions(
             contact_key = ("XB", r_resn, r_resi, r_name, l_name)
             if contact_key not in seen_contacts:
                 seen_contacts.add(contact_key)
-                detected_interactions.append(
+                xb_items.append(
                     InteractionItem(
                         interaction_type="Halogen Bond",
                         residue_name=r_resn,
@@ -415,53 +488,40 @@ def analyze_interactions(
                         ligand_atom=l_name,
                         distance=dist,
                         details=f"卤素 {l_elem} ↔ 路易斯碱 {r_elem}",
+                        ligand_model=str(l_model),
+                        ligand_index=int(l_index),
+                        receptor_model=str(r_model),
+                        receptor_index=int(r_index),
                     )
                 )
             continue
 
-        # 4.4 Aromatic / pi-interactions (Aromatic ring carbons within 4.5A)
+        # 4.4 Aromatic / pi-interactions (Aromatic ring within 4.5A)
         if r_resn in aromatic_resns and r_name in {"CG", "CD1", "CD2", "CE1", "CE2", "CZ", "NE1", "CH2", "CZ2", "CZ3"}:
             if l_elem == "C" and dist <= 4.5:
-                contact_key = ("PI", r_resn, r_resi, r_name, l_name)
-                if contact_key not in seen_contacts:
-                    seen_contacts.add(contact_key)
-                    detected_interactions.append(
-                        InteractionItem(
-                            interaction_type="π-Stacking",
-                            residue_name=r_resn,
-                            residue_number=r_resi,
-                            chain=r_chain,
-                            receptor_atom=r_name,
-                            ligand_atom=l_name,
-                            distance=dist,
-                            details=f"芳香环接触 ({r_resn})",
-                        )
-                    )
+                res_key = (r_resn, r_resi)
+                if res_key not in pi_by_res or dist < pi_by_res[res_key][0]:
+                    pi_by_res[res_key] = (dist, lig_key, rec_key, ligand_atom_dict[lig_key], pocket_atom_dict[rec_key], f"芳香环接触 ({r_resn})")
                 continue
             elif l_elem == "N" and dist <= 4.2:
-                contact_key = ("CPI", r_resn, r_resi, r_name, l_name)
-                if contact_key not in seen_contacts:
-                    seen_contacts.add(contact_key)
-                    detected_interactions.append(
-                        InteractionItem(
-                            interaction_type="Cation-π",
-                            residue_name=r_resn,
-                            residue_number=r_resi,
-                            chain=r_chain,
-                            receptor_atom=r_name,
-                            ligand_atom=l_name,
-                            distance=dist,
-                            details=f"芳香环与阳离子配体原子",
-                        )
-                    )
+                res_key = (r_resn, r_resi)
+                if res_key not in pi_by_res or dist < pi_by_res[res_key][0]:
+                    pi_by_res[res_key] = (dist, lig_key, rec_key, ligand_atom_dict[lig_key], pocket_atom_dict[rec_key], f"杂环芳香堆积 ({r_resn})")
                 continue
+
+        # Cation-pi: Basic protein residue (ARG/LYS sidechain cation) ↔ Ligand aromatic ring
+        if r_resn in {"ARG", "LYS"} and r_name in {"NZ", "NH1", "NH2", "NE", "CZ"} and l_elem == "C" and dist <= 4.5:
+            res_key = (r_resn, r_resi)
+            if res_key not in cpi_by_res or dist < cpi_by_res[res_key][0]:
+                cpi_by_res[res_key] = (dist, lig_key, rec_key, ligand_atom_dict[lig_key], pocket_atom_dict[rec_key], f"阳离子侧链 ({r_resn}) ↔ 配体芳香环")
+            continue
 
         # 4.5 Hydrophobic Contact (Carbon-Carbon within 4.0A, excluding backbone carbonyl C)
         if l_elem == "C" and r_elem == "C" and r_resn in hydrophobic_resns and r_name != "C" and 2.8 <= dist <= 4.0:
             contact_key = ("HP", r_resn, r_resi, r_name, l_name)
             if contact_key not in seen_contacts:
                 seen_contacts.add(contact_key)
-                detected_interactions.append(
+                hp_items.append(
                     InteractionItem(
                         interaction_type="Hydrophobic Contact",
                         residue_name=r_resn,
@@ -471,8 +531,96 @@ def analyze_interactions(
                         ligand_atom=l_name,
                         distance=dist,
                         details="非极性碳接触",
+                        ligand_model=str(l_model),
+                        ligand_index=int(l_index),
+                        receptor_model=str(r_model),
+                        receptor_index=int(r_index),
                     )
                 )
+
+    # Greedy 1-to-1 Pruning for Hydrogen Bonds:
+    # Sort candidates by distance ascending (strongest first)
+    hb_candidates.sort(key=lambda x: x[0])
+    assigned_lig_hb: set[Any] = set()
+    assigned_rec_hb: set[Any] = set()
+
+    for dist, lig_key, rec_key, l_data, r_data, details in hb_candidates:
+        if lig_key in assigned_lig_hb or rec_key in assigned_rec_hb:
+            continue
+        assigned_lig_hb.add(lig_key)
+        assigned_rec_hb.add(rec_key)
+
+        l_resn, l_resi, l_chain, l_name, l_elem, lx, ly, lz = l_data
+        r_resn, r_resi, r_chain, r_name, r_elem, rx, ry, rz = r_data
+        l_model, l_index = lig_key if isinstance(lig_key, tuple) and len(lig_key) == 2 else ("", 0)
+        r_model, r_index = rec_key if isinstance(rec_key, tuple) and len(rec_key) == 2 else ("", 0)
+
+        detected_interactions.append(
+            InteractionItem(
+                interaction_type="Hydrogen Bond",
+                residue_name=r_resn,
+                residue_number=r_resi,
+                chain=r_chain,
+                receptor_atom=r_name,
+                ligand_atom=l_name,
+                distance=dist,
+                details=details,
+                ligand_model=str(l_model),
+                ligand_index=int(l_index),
+                receptor_model=str(r_model),
+                receptor_index=int(r_index),
+            )
+        )
+
+    # Append remaining interaction categories
+    detected_interactions.extend(sb_items)
+    detected_interactions.extend(xb_items)
+
+    for (r_resn, r_resi), (dist, lig_key, rec_key, l_data, r_data, details) in sorted(pi_by_res.items()):
+        l_resn, l_resi, l_chain, l_name, l_elem, lx, ly, lz = l_data
+        r_resn, r_resi, r_chain, r_name, r_elem, rx, ry, rz = r_data
+        l_model, l_index = lig_key if isinstance(lig_key, tuple) and len(lig_key) == 2 else ("", 0)
+        r_model, r_index = rec_key if isinstance(rec_key, tuple) and len(rec_key) == 2 else ("", 0)
+        detected_interactions.append(
+            InteractionItem(
+                interaction_type="π-Stacking",
+                residue_name=r_resn,
+                residue_number=r_resi,
+                chain=r_chain,
+                receptor_atom=r_name,
+                ligand_atom=l_name,
+                distance=dist,
+                details=details,
+                ligand_model=str(l_model),
+                ligand_index=int(l_index),
+                receptor_model=str(r_model),
+                receptor_index=int(r_index),
+            )
+        )
+
+    for (r_resn, r_resi), (dist, lig_key, rec_key, l_data, r_data, details) in sorted(cpi_by_res.items()):
+        l_resn, l_resi, l_chain, l_name, l_elem, lx, ly, lz = l_data
+        r_resn, r_resi, r_chain, r_name, r_elem, rx, ry, rz = r_data
+        l_model, l_index = lig_key if isinstance(lig_key, tuple) and len(lig_key) == 2 else ("", 0)
+        r_model, r_index = rec_key if isinstance(rec_key, tuple) and len(rec_key) == 2 else ("", 0)
+        detected_interactions.append(
+            InteractionItem(
+                interaction_type="Cation-π",
+                residue_name=r_resn,
+                residue_number=r_resi,
+                chain=r_chain,
+                receptor_atom=r_name,
+                ligand_atom=l_name,
+                distance=dist,
+                details=details,
+                ligand_model=str(l_model),
+                ligand_index=int(l_index),
+                receptor_model=str(r_model),
+                receptor_index=int(r_index),
+            )
+        )
+
+    detected_interactions.extend(hp_items)
 
     report = InteractionReport(
         ligand_selection=ligand_selection,

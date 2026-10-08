@@ -77,9 +77,14 @@ class APIKeyDialog(QtWidgets.QDialog):
         super().__init__(parent)
         current_url = base_url().lower()
         current_model = model().lower()
+        is_moonshot = "moonshot" in current_url or "kimi" in current_model
         is_dashscope = "qianwen" in current_url or "dashscope" in current_url or current_model.startswith("qwen")
 
-        if is_dashscope:
+        if is_moonshot:
+            self.setWindowTitle("Moonshot / Kimi API Key")
+            link_url = "https://platform.moonshot.cn/"
+            link_text = "Get Moonshot / Kimi API Key (月之暗面开放平台)"
+        elif is_dashscope:
             self.setWindowTitle("DashScope / Qwen API Key")
             link_url = "https://bailian.console.aliyun.com/"
             link_text = "Get DashScope API Key (阿里云百炼)"
@@ -187,17 +192,18 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.busy = False
         self._streaming = False
         self._messages: list[dict[str, Any]] = []
+        self._cached_history_html: str = ""
         self._pending_images: list[dict[str, Any]] = []
         self._active_turn: dict[str, Any] | None = None
         self._thinking_timer = QtCore.QTimer(self)
-        self._thinking_timer.setInterval(250)
+        self._thinking_timer.setInterval(1000)
         self._thinking_timer.timeout.connect(self._on_thinking_tick)
         self._auto_scroll = True
         self._rendering_history = False
         self._last_stream_render = 0.0
         self._stream_timer = QtCore.QTimer(self)
         self._stream_timer.setSingleShot(True)
-        self._stream_timer.setInterval(40)
+        self._stream_timer.setInterval(100)
         self._stream_timer.timeout.connect(self._flush_stream_render)
 
         self.speech = SpeechPlayer(self)
@@ -371,9 +377,17 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         self.stop_button.setVisible(False)
         self.stop_button.clicked.connect(self.cancel)
 
+        self.mode_button = QtWidgets.QPushButton()
+        self.mode_button.setObjectName("chat_mode_button")
+        self.mode_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self.mode_button.setFixedHeight(30)
+        self.mode_button.clicked.connect(self._cycle_thinking_mode)
+        self._sync_mode_button()
+
         input_row.addWidget(self.mic_button)
         input_row.addWidget(self.image_button)
         input_row.addWidget(self.input, 1)
+        input_row.addWidget(self.mode_button)
         input_row.addWidget(self.stop_button)
         input_row.addWidget(self.key_status)
         input_row.addWidget(self.menu_button)
@@ -396,7 +410,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
 
         self._last_state_signature = None
         self._viewport_poll_timer = QtCore.QTimer(self)
-        self._viewport_poll_timer.setInterval(700)
+        self._viewport_poll_timer.setInterval(1500)
         self._viewport_poll_timer.timeout.connect(self._poll_viewport_changes)
         self._viewport_poll_timer.start()
 
@@ -723,11 +737,88 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             }
         """)
 
-    def _thinking_mode_triggered(self, action: QtWidgets.QAction):
-        mode = action.data() or "auto"
+    def set_thinking_mode(self, mode: str):
+        mode = mode or "auto"
         self.settings.setValue("thinking_mode", mode)
         if self.agent is not None:
             self.agent.enable_thinking = mode
+        if hasattr(self, "action_thinking_on"):
+            if mode == "on":
+                self.action_thinking_on.setChecked(True)
+            elif mode == "off":
+                self.action_thinking_off.setChecked(True)
+            else:
+                self.action_thinking_auto.setChecked(True)
+        self._sync_mode_button()
+
+    def _thinking_mode_triggered(self, action: QtWidgets.QAction):
+        mode = action.data() or "auto"
+        self.set_thinking_mode(mode)
+
+    def _cycle_thinking_mode(self):
+        current = self.settings.value("thinking_mode", thinking_mode(), type=str)
+        cycle_map = {"auto": "off", "off": "on", "on": "auto"}
+        next_mode = cycle_map.get(current, "auto")
+        self.set_thinking_mode(next_mode)
+
+    def _sync_mode_button(self):
+        if not hasattr(self, "mode_button"):
+            return
+        mode = self.settings.value("thinking_mode", thinking_mode(), type=str)
+        if mode == "off":
+            self.mode_button.setText("⚡ 极速")
+            self.mode_button.setToolTip("【极速轻量模式】已开启：跳过深度思考推导，1-2秒极速执行指令。\n点击切换模式。")
+            self.mode_button.setStyleSheet("""
+                QPushButton#chat_mode_button {
+                    background-color: #162B22;
+                    color: #34D399;
+                    border: 1px solid #059669;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 6px;
+                }
+                QPushButton#chat_mode_button:hover {
+                    background-color: #1D3D30;
+                    border-color: #10B981;
+                }
+            """)
+        elif mode == "on":
+            self.mode_button.setText("💭 思考")
+            self.mode_button.setToolTip("【深度思考模式】已开启：每次操作前充分推导背景与机制。\n点击切换模式。")
+            self.mode_button.setStyleSheet("""
+                QPushButton#chat_mode_button {
+                    background-color: #281D3E;
+                    color: #C084FC;
+                    border: 1px solid #7C3AED;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 6px;
+                }
+                QPushButton#chat_mode_button:hover {
+                    background-color: #372658;
+                    border-color: #A855F7;
+                }
+            """)
+        else:
+            self.mode_button.setText("⚡ 自动")
+            self.mode_button.setToolTip("【智能自适应模式】：常规操作极速执行，复杂机理分析自动推导。\n点击切换模式。")
+            self.mode_button.setStyleSheet("""
+                QPushButton#chat_mode_button {
+                    background-color: #1E293B;
+                    color: #38BDF8;
+                    border: 1px solid #0284C7;
+                    border-radius: 4px;
+                    font-size: 11px;
+                    font-weight: 600;
+                    padding: 0 6px;
+                }
+                QPushButton#chat_mode_button:hover {
+                    background-color: #143F5E;
+                    border-color: #38BDF8;
+                }
+            """)
 
     def _ensure_agent(self):
         if self.agent is None:
@@ -751,7 +842,13 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         active = bool(api_key())
         self.key_status.setProperty("active", active)
         current_url = base_url().lower()
-        provider = "DashScope / Qwen" if "qianwen" in current_url or "dashscope" in current_url else "AI"
+        current_model = model().lower()
+        if "moonshot" in current_url or "kimi" in current_model:
+            provider = "Moonshot / Kimi"
+        elif "qianwen" in current_url or "dashscope" in current_url or current_model.startswith("qwen"):
+            provider = "DashScope / Qwen"
+        else:
+            provider = "AI"
         self.key_status.setToolTip(
             f"{provider} API key active" if active else f"No {provider} API key configured"
         )
@@ -795,44 +892,6 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         if main_win and hasattr(main_win, "ext_window"):
             main_win.ext_window.setVisible(checked)
 
-    def keyPressEvent(self, event):
-        if event.key() == QtCore.Qt.Key_Escape and self.busy:
-            self.cancel()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def cancel(self):
-        """Immediately cancel active agent execution and restore user input."""
-        if not self.busy:
-            return
-        self._cancelled_task = True
-        if self.agent is not None:
-            self.agent.cancel()
-        self._streaming = False
-        self._thinking_timer.stop()
-
-        if self._active_turn is not None:
-            thought = self._active_turn.get("thought", "")
-            streamed = self._active_turn.get("text", "")
-            elapsed = max(0.1, time.time() - self._active_turn.get("start_time", time.time()))
-            cancelled_text = (streamed + ("\n\n" if streamed else "")) + "*[⏹ 操作已由用户手动取消]*"
-            self._messages.append({
-                "id": self._active_turn["id"],
-                "who": "PyMOL",
-                "text": cancelled_text,
-                "thought": thought,
-                "thought_duration": self._active_turn.get("thought_duration", 0.0),
-                "exec_duration": 0.0,
-                "total_duration": elapsed,
-                "tool_calls": self._active_turn.get("tool_calls", []),
-                "thought_expanded": False,
-                "tools_expanded": {},
-            })
-            self._active_turn = None
-            self._render_history(scroll_to_bottom=True)
-
-        self._set_busy(False)
 
     def _ensure_api_key(self):
         return bool(api_key()) or self.show_key_dialog()
@@ -884,9 +943,11 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 for m in self._messages:
                     if m.get("id") == msg_id:
                         m["thought_expanded"] = not m.get("thought_expanded", False)
+                        m.pop("_cached_html", None)
                         break
                 if self._active_turn and self._active_turn.get("id") == msg_id:
                     self._active_turn["thought_expanded"] = not self._active_turn.get("thought_expanded", False)
+                self._rebuild_history_cache()
                 self._auto_scroll = False
                 self._render_history(scroll_to_bottom=False)
             except Exception:
@@ -900,10 +961,12 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                     if m.get("id") == msg_id:
                         tools_exp = m.setdefault("tools_expanded", {})
                         tools_exp[t_idx] = not tools_exp.get(t_idx, False)
+                        m.pop("_cached_html", None)
                         break
                 if self._active_turn and self._active_turn.get("id") == msg_id:
                     tools_exp = self._active_turn.setdefault("tools_expanded", {})
                     tools_exp[t_idx] = not tools_exp.get(t_idx, False)
+                self._rebuild_history_cache()
                 self._auto_scroll = False
                 self._render_history(scroll_to_bottom=False)
             except Exception:
@@ -938,12 +1001,12 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
 
         self._active_turn["text"] += token
         now = time.time()
-        if now - self._last_stream_render >= 0.04:
+        if now - self._last_stream_render >= 0.1:
             self._last_stream_render = now
             self._stream_timer.stop()
             self._render_history(scroll_to_bottom=False)
         elif not self._stream_timer.isActive():
-            self._stream_timer.start(40)
+            self._stream_timer.start(100)
 
     def _prompt_add_image(self):
         menu = QtWidgets.QMenu(self.image_button)
@@ -1177,7 +1240,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             tot_dur = getattr(answer, "total_duration", 0.0)
             tool_calls = getattr(answer, "tool_calls", []) or self._active_turn.get("tool_calls", [])
 
-            self._messages.append({
+            msg_obj = {
                 "id": self._active_turn["id"],
                 "who": "PyMOL",
                 "text": final_content,
@@ -1188,7 +1251,10 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 "tool_calls": tool_calls,
                 "thought_expanded": False,
                 "tools_expanded": {},
-            })
+            }
+            self._messages.append(msg_obj)
+            card_html = self._render_message_card(msg_obj)
+            self._cached_history_html += card_html
             self._active_turn = None
         else:
             self._append_message("PyMOL", reply_str)
@@ -1212,7 +1278,6 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             self._auto_scroll = True
         else:
             self._auto_scroll = False
-        self._render_history(scroll_to_bottom=False)
 
     def _on_scroll_value_changed(self, value: int):
         if getattr(self, "_rendering_history", False):
@@ -1287,7 +1352,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         if hasattr(self, "agent") and self.agent is not None:
             self.agent.cancel()
         if self._active_turn is not None:
-            self._messages.append({
+            msg_obj = {
                 "id": self._active_turn["id"],
                 "who": "PyMOL",
                 "text": "*[⏹ 操作已由用户手动取消]*",
@@ -1298,7 +1363,10 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 "tool_calls": self._active_turn.get("tool_calls", []),
                 "thought_expanded": False,
                 "tools_expanded": {},
-            })
+            }
+            self._messages.append(msg_obj)
+            card_html = self._render_message_card(msg_obj)
+            self._cached_history_html += card_html
             self._active_turn = None
         else:
             self._append_message("PyMOL", "*[⏹ 操作已由用户手动取消]*")
@@ -1533,6 +1601,10 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         return result_html
 
     def _render_message_card(self, msg: dict[str, Any]) -> str:
+        cached = msg.get("_cached_html")
+        if cached is not None:
+            return cached
+
         who = msg.get("who", "PyMOL")
         text = msg.get("text", "")
         content = self._format_content(text)
@@ -1550,7 +1622,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                     )
                 images_html = f'<div style="margin-top: 6px; margin-bottom: 2px;">{"".join(img_tags)}</div>'
 
-            return (
+            card_html = (
                 '<table width="100%" cellpadding="9" cellspacing="0" style="margin-bottom: 8px;" bgcolor="#28233C">'
                 '<tr><td style="border: 1px solid #433966; border-radius: 8px;">'
                 '<div style="color: #A78BFA; font-size: 11px; font-weight: bold; margin-bottom: 4px;">'
@@ -1663,7 +1735,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                         )
                     tools_html += '</div>'
 
-            return (
+            card_html = (
                 '<table width="100%" cellpadding="10" cellspacing="0" style="margin-bottom: 8px;" bgcolor="#202328">'
                 '<tr><td style="border: 1px solid #303540; border-radius: 8px;">'
                 f'{badge_html}'
@@ -1673,7 +1745,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 '</td></tr></table>'
             )
         elif who == "Error":
-            return (
+            card_html = (
                 '<table width="100%" cellpadding="9" cellspacing="0" style="margin-bottom: 8px;" bgcolor="#361E22">'
                 '<tr><td style="border: 1px solid #5C282F; border-radius: 8px;">'
                 '<div style="color: #F87171; font-size: 11px; font-weight: bold; margin-bottom: 4px;">'
@@ -1682,7 +1754,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 '</td></tr></table>'
             )
         else:
-            return (
+            card_html = (
                 '<table width="100%" cellpadding="9" cellspacing="0" style="margin-bottom: 8px;" bgcolor="#1E232F">'
                 '<tr><td style="border: 1px solid #2D3748; border-radius: 8px;">'
                 f'<div style="color: #60A5FA; font-size: 11px; font-weight: bold; margin-bottom: 4px;">'
@@ -1690,6 +1762,9 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 f'<div style="color: #CBD5E1; font-size: 13px; line-height: 150%;">{content}</div>'
                 '</td></tr></table>'
             )
+
+        msg["_cached_html"] = card_html
+        return card_html
 
     def _render_active_turn_card(self, turn: dict[str, Any]) -> str:
         state = turn.get("state", "thinking")
@@ -1823,6 +1898,10 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
                 '</td></tr></table>'
             )
 
+    def _rebuild_history_cache(self):
+        """Rebuild combined HTML of all finalized historical messages."""
+        self._cached_history_html = "".join(self._render_message_card(m) for m in self._messages)
+
     def _render_history(self, scroll_to_bottom: bool = False):
         v_bar = self.history.verticalScrollBar()
         if v_bar.isSliderDown():
@@ -1832,11 +1911,12 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
 
         self._rendering_history = True
         try:
-            cards = [self._render_message_card(m) for m in self._messages]
-            if self._active_turn is not None:
-                cards.append(self._render_active_turn_card(self._active_turn))
-
-            self.history.setHtml("".join(cards))
+            active_html = (
+                self._render_active_turn_card(self._active_turn)
+                if self._active_turn is not None
+                else ""
+            )
+            self.history.setHtml(self._cached_history_html + active_html)
 
             should_scroll = scroll_to_bottom or self._auto_scroll
             if should_scroll:
@@ -1855,7 +1935,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
         tot_dur = getattr(text, "total_duration", 0.0)
         tool_calls = getattr(text, "tool_calls", [])
 
-        self._messages.append({
+        msg = {
             "id": len(self._messages),
             "who": who,
             "text": str(text),
@@ -1867,7 +1947,10 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
             "tool_calls": tool_calls,
             "thought_expanded": False,
             "tools_expanded": {},
-        })
+        }
+        self._messages.append(msg)
+        card_html = self._render_message_card(msg)
+        self._cached_history_html += card_html
         self._render_history(scroll_to_bottom=True)
 
     def _set_busy(self, busy: bool):
@@ -1892,7 +1975,7 @@ class PyMOLFlowDock(QtWidgets.QDockWidget):
 
     def _poll_viewport_changes(self):
         """Poll 3D viewport state changes (objects and 'sele' selection) to dynamically update pills."""
-        if not hasattr(self, "pill_bar") or self.busy:
+        if not hasattr(self, "pill_bar") or self.busy or not self.isVisible():
             return
         try:
             from pymol import cmd

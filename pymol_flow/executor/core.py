@@ -55,6 +55,7 @@ class PyMOLExecutor:
                 apply_publication_preset,
                 compare_conformations,
                 load_structures_from_path,
+                show_pocket_surface,
                 visualize_plddt,
             )
 
@@ -68,6 +69,7 @@ class PyMOLExecutor:
                 "analyze_interactions": analyze_interactions,
                 "compare_conformations": compare_conformations,
                 "apply_publication_preset": apply_publication_preset,
+                "show_pocket_surface": show_pocket_surface,
                 "visualize_plddt": visualize_plddt,
                 "load_structures_from_path": load_structures_from_path,
                 **self.locals,

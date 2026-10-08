@@ -344,9 +344,12 @@ class PyMOLAgent:
             extra_body: dict[str, Any] = {"enable_thinking": bool(active_thinking)}
             if active_thinking:
                 extra_body["thinking_budget"] = config_thinking_budget()
+            curr_model = model().lower()
+            temperature = 1.0 if "kimi" in curr_model else 0.6
             kwargs: dict[str, Any] = {
                 "model": model(),
                 "messages": list(self.messages),
+                "temperature": temperature,
                 "extra_body": extra_body,
                 "stream": True,
                 "max_tokens": config_max_tokens(),
@@ -409,12 +412,16 @@ class PyMOLAgent:
                     if not getattr(chunk, "choices", None):
                         continue
                     delta = chunk.choices[0].delta
-                    if hasattr(delta, "reasoning_content") and delta.reasoning_content is not None:
-                        reasoning_chunks.append(delta.reasoning_content)
-                        all_reasoning_chunks.append(delta.reasoning_content)
-                        self.debug(f"[Thinking] {delta.reasoning_content}")
+
+                    # Capture reasoning tokens if thinking mode is active
+                    reasoning = getattr(delta, "reasoning_content", None)
+                    if reasoning:
+                        reasoning_chunks.append(reasoning)
+                        all_reasoning_chunks.append(reasoning)
+                        self.debug(f"[Thinking] {reasoning}")
                         if on_thought_cb:
-                            on_thought_cb(delta.reasoning_content)
+                            on_thought_cb(reasoning)
+
                     if hasattr(delta, "tool_calls") and delta.tool_calls:
                         if t_thought_end is None and all_reasoning_chunks:
                             t_thought_end = time.time()
@@ -433,7 +440,7 @@ class PyMOLAgent:
                                     tool_calls_dict[idx]["name"] = tc.function.name
                                 if getattr(tc.function, "arguments", None):
                                     tool_calls_dict[idx]["arguments"] += tc.function.arguments
-                    if hasattr(delta, "content") and delta.content:
+                    if getattr(delta, "content", None):
                         if t_thought_end is None and all_reasoning_chunks:
                             t_thought_end = time.time()
                         content_chunks.append(delta.content)

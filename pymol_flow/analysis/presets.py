@@ -132,6 +132,11 @@ def apply_publication_preset(
             cmd.set("stick_radius", 0.28)
             cmd.set("ray_shadows", 1)
             cmd.set("ambient", 0.35)
+            cmd.set("two_sided_lighting", 1)
+            if cmd.count_atoms("organic") > 0:
+                cmd.set("surface_carve_selection", "organic")
+                cmd.set("surface_carve_cutoff", 5.0)
+                cmd.set("surface_color", "white", selection)
             # Show translucent surface on target or selection
             cmd.show("surface", selection)
             cmd.show("sticks", f"({selection}) and (organic or (polymer.protein within 4.5 of organic))")
@@ -293,3 +298,79 @@ def visualize_plddt(
             success=False,
             warning=f"Error analyzing pLDDT: {exc}",
         )
+
+
+def show_pocket_surface(
+    ligand_selection: str = "organic",
+    receptor_selection: str = "polymer.protein",
+    carve_cutoff: float = 4.5,
+    pocket_stick_cutoff: float = 3.8,
+    transparency: float = 0.5,
+    surface_color: str = "gray90",
+    cartoon_transparency: float = 0.60,
+    cmd_api: Any = None,
+) -> None:
+    """Render a smooth, publication-grade binding pocket cavity surface using PyMOL's native surface_carve.
+
+    Avoids the unphysical 'potato blob' phenomenon caused by calculating surfaces on isolated residue selections,
+    and applies high-contrast color hierarchy (Yellow ligand carbons, Cyan pocket residues, translucent ribbons)
+    with clean sidechain representations (cartoon_side_chain_helper).
+    """
+    if cmd_api is None:
+        from pymol import cmd as cmd_api
+
+    # 1. Resolve ligand selection
+    if ligand_selection == "sele":
+        try:
+            if "sele" not in cmd_api.get_names("selections") or cmd_api.count_atoms("sele") == 0:
+                ligand_selection = "organic"
+        except Exception:
+            ligand_selection = "organic"
+
+    try:
+        if cmd_api.count_atoms(ligand_selection) == 0:
+            if cmd_api.count_atoms("organic and not solvent") > 0:
+                ligand_selection = "organic and not solvent"
+            elif cmd_api.count_atoms("not (polymer or solvent)") > 0:
+                ligand_selection = "not (polymer or solvent)"
+    except Exception:
+        pass
+
+    pocket_sel = f"byres (({receptor_selection}) within {pocket_stick_cutoff} of ({ligand_selection}))"
+
+    try:
+        # 1. Clean previous isolated or cluttered surfaces
+        cmd_api.hide("surface", "all")
+
+        # 2. Sidechain cleaner & cartoon transparency
+        cmd_api.set("cartoon_side_chain_helper", 1)
+        if cartoon_transparency > 0:
+            cmd_api.set("cartoon_transparency", cartoon_transparency)
+
+        # 3. Base representations: cartoon for protein, crisp sticks for pocket and ligand
+        cmd_api.show("cartoon", receptor_selection)
+        cmd_api.show("sticks", ligand_selection)
+        cmd_api.show("sticks", pocket_sel)
+
+        # 4. Color hierarchy: Yellow ligand carbons, Cyan pocket residue carbons
+        cmd_api.color("cyan", f"({pocket_sel}) and elem C")
+        cmd_api.color("yellow", f"({ligand_selection}) and elem C")
+        cmd_api.set("stick_radius", 0.28, ligand_selection)
+        cmd_api.set("stick_radius", 0.18, pocket_sel)
+
+        # 5. Apply smooth continuous cavity surface on the full receptor
+        cmd_api.set("surface_carve_selection", ligand_selection)
+        cmd_api.set("surface_carve_cutoff", carve_cutoff)
+        if surface_color:
+            cmd_api.set("surface_color", surface_color, receptor_selection)
+        cmd_api.set("transparency", transparency)
+        cmd_api.set("two_sided_lighting", 1)
+        cmd_api.show("surface", receptor_selection)
+
+        # 6. Center and orient camera on pocket
+        cmd_api.orient(ligand_selection)
+        cmd_api.zoom(ligand_selection, 4.5)
+    except Exception:
+        pass
+
+

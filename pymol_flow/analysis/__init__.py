@@ -25,6 +25,7 @@ from .presets import (
     PLDDTResult,
     PresetResult,
     apply_publication_preset,
+    show_pocket_surface,
     visualize_plddt,
 )
 from .selection import (
@@ -53,5 +54,6 @@ __all__ = [
     "get_viewport_selection_summary",
     "load_structures_from_path",
     "sanitize_object_name",
+    "show_pocket_surface",
     "visualize_plddt",
 ]

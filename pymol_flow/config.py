@@ -7,7 +7,6 @@ from pathlib import Path
 
 
 _default_app_dir = Path.home() / ".pymol-flow"
-_default_app_dir = Path.home() / ".pymol-flow"
 
 APP_DIR = Path(
     os.environ.get("PYMOL_FLOW_WORKDIR")
@@ -15,8 +14,8 @@ APP_DIR = Path(
 ).expanduser()
 CAPTURE_DIR = APP_DIR / "captures"
 DOWNLOAD_DIR = APP_DIR / "downloads"
-DEFAULT_MODEL = "qwen3.8-flash"
-DEFAULT_BASE_URL = "https://maas.qianwenaiapi.com/compatible-mode/v1"
+DEFAULT_MODEL = "kimi-k2.7-code"
+DEFAULT_BASE_URL = "https://api.moonshot.cn/v1"
 DEFAULT_TRANSCRIBE_MODEL = "gpt-4o-mini-transcribe"
 
 
@@ -71,28 +70,50 @@ def api_key() -> str:
     if stored_key:
         return stored_key
     return (
-        os.environ.get("DASHSCOPE_API_KEY")
+        os.environ.get("MOONSHOT_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
+        or os.environ.get("DASHSCOPE_API_KEY")
         or ""
     ).strip()
 
 
+def normalize_model_name(raw_name: str) -> str:
+    """Normalize user-friendly model names (e.g. 'Kimi K2.7 Code') to official API model IDs."""
+    s = raw_name.strip()
+    clean = s.lower().replace(" ", "").replace("_", "-")
+    if "kimik2.7" in clean or "kimi-k2.7" in clean:
+        return "kimi-k2.7-code"
+    if "kimik3" in clean or "kimi-k3" in clean:
+        return "kimi-k3"
+    if "kimik2.6" in clean or "kimi-k2.6" in clean:
+        return "kimi-k2.6"
+    return s
+
+
 def base_url() -> str:
     load_local_env()
-    return (
-        os.environ.get("OPENAI_BASE_URL")
+    configured = (
+        os.environ.get("MOONSHOT_BASE_URL")
+        or os.environ.get("OPENAI_BASE_URL")
         or os.environ.get("DASHSCOPE_BASE_URL")
-        or DEFAULT_BASE_URL
+        or ""
     ).strip()
+    curr_model = model().lower()
+    # If model is Moonshot Kimi but base_url still points to old Qianwen/DashScope, auto-resolve to Moonshot base URL
+    if "kimi" in curr_model and ("qianwen" in configured.lower() or "dashscope" in configured.lower()):
+        return DEFAULT_BASE_URL
+    return configured or DEFAULT_BASE_URL
 
 
 def model() -> str:
     load_local_env()
-    return (
-        os.environ.get("OPENAI_MODEL")
+    raw = (
+        os.environ.get("MOONSHOT_MODEL")
+        or os.environ.get("OPENAI_MODEL")
         or os.environ.get("DASHSCOPE_MODEL")
         or DEFAULT_MODEL
     ).strip()
+    return normalize_model_name(raw)
 
 
 def transcription_model() -> str:
@@ -100,14 +121,18 @@ def transcription_model() -> str:
 
 
 def thinking_mode() -> str:
-    """Return the configured thinking mode: 'auto' (default), 'on', or 'off'."""
+    """Return the configured thinking mode: 'off' (default fast mode, sub-2s execution), 'auto', or 'on'."""
     load_local_env()
-    val = os.environ.get("DASHSCOPE_ENABLE_THINKING", "auto").lower().strip()
+    val = (
+        os.environ.get("MOONSHOT_ENABLE_THINKING")
+        or os.environ.get("DASHSCOPE_ENABLE_THINKING")
+        or "off"
+    ).lower().strip()
     if val in {"true", "1", "yes", "on", "always"}:
         return "on"
-    if val in {"false", "0", "no", "off", "never"}:
-        return "off"
-    return "auto"
+    if val in {"auto"}:
+        return "auto"
+    return "off"
 
 
 def enable_thinking() -> bool:
@@ -117,7 +142,11 @@ def enable_thinking() -> bool:
 def thinking_budget() -> int:
     """Return max thinking tokens (budget). Default is 1024 to prevent runaway 70+ second thinking loops."""
     load_local_env()
-    val = os.environ.get("DASHSCOPE_THINKING_BUDGET", "1024").strip()
+    val = (
+        os.environ.get("MOONSHOT_THINKING_BUDGET")
+        or os.environ.get("DASHSCOPE_THINKING_BUDGET")
+        or "1024"
+    ).strip()
     try:
         return max(128, min(8192, int(val)))
     except ValueError:
@@ -128,14 +157,15 @@ def max_tokens() -> int:
     """Return max completion tokens to prevent runaway output token consumption."""
     load_local_env()
     val = (
-        os.environ.get("OPENAI_MAX_TOKENS")
+        os.environ.get("MOONSHOT_MAX_TOKENS")
+        or os.environ.get("OPENAI_MAX_TOKENS")
         or os.environ.get("DASHSCOPE_MAX_TOKENS")
-        or "1536"
+        or "2048"
     ).strip()
     try:
         return max(256, min(8192, int(val)))
     except ValueError:
-        return 1536
+        return 2048
 
 
 def max_history_messages() -> int:
